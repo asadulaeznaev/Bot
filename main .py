@@ -1,6 +1,7 @@
 import os
 import asyncio
-from datetime import datetime # Ensure datetime is imported for formatting
+import logging # Added
+from datetime import datetime
 from telebot.async_telebot import AsyncTeleBot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 from telebot.asyncio_filters import StateFilter
@@ -10,14 +11,29 @@ from database import DatabaseManager
 from ledger import LedgerManager
 from bot_states import UserStates
 
+# --- Logging Configuration ---
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler("bot.log", encoding='utf-8'),
+        logging.StreamHandler()
+    ]
+)
+# Main application logger (can be used for general app-level logs if needed)
+app_logger = logging.getLogger("HelgyKoinBotApp")
+
+
 class BotApp:
     def __init__(self, token: str, admin_ids: list[int], ledger_manager: LedgerManager):
         self.bot = AsyncTeleBot(token)
         self.admin_ids = admin_ids
         self.ledger_manager = ledger_manager
         self.token_config = TokenConfig()
+        self.logger = logging.getLogger(self.__class__.__name__) # Logger for BotApp class
         self.bot.add_custom_filter(StateFilter(self.bot))
         self._register_handlers()
+        self.logger.info("BotApp initialized.")
 
     # --- Keyboard Methods ---
     def _main_menu_keyboard(self):
@@ -25,7 +41,7 @@ class BotApp:
         markup.add(InlineKeyboardButton("💰 Мой Баланс", callback_data="show_balance"),
                    InlineKeyboardButton("💸 Отправить HKN", callback_data="send_hkn"),
                    InlineKeyboardButton("🌾 Фарминг", callback_data="go_farming_menu"),
-                   InlineKeyboardButton("🏦 Продать HKN", callback_data="sell_hkn_prompt"), # New Sell HKN button
+                   InlineKeyboardButton("🏦 Продать HKN", callback_data="sell_hkn_prompt"),
                    InlineKeyboardButton("📜 История", callback_data="show_history"),
                    InlineKeyboardButton("ℹ️ О Токене", callback_data="token_info"))
         return markup
@@ -66,11 +82,9 @@ class BotApp:
     def _select_stake_keyboard(self, stakes: list, action_prefix: str) -> InlineKeyboardMarkup:
         markup = InlineKeyboardMarkup(row_width=1)
         if not stakes:
-            # This case should ideally be handled before calling this keyboard method
             markup.add(InlineKeyboardButton("Нет доступных стейков", callback_data="no_stakes_to_select"))
         else:
             for stake in stakes:
-                # Ensure pending_rewards is a float for formatting
                 pending_rewards_float = float(stake.get('pending_rewards', 0.0))
                 button_text = (f"ID {stake['stake_id']}: {stake['amount']:.{self.token_config.DECIMALS}f} HKN "
                                f"(Награда: {pending_rewards_float:.{self.token_config.DECIMALS}f})")
@@ -83,19 +97,25 @@ class BotApp:
         return user_id in self.admin_ids
 
     async def _send_or_edit(self, chat_id, text, reply_markup=None, parse_mode=None, message_id=None):
-        if message_id:
-            try:
+        try:
+            if message_id:
                 await self.bot.edit_message_text(text, chat_id, message_id, reply_markup=reply_markup, parse_mode=parse_mode)
-            except Exception as e:
-                if "message is not modified" not in str(e).lower():
-                    # If editing failed for other reasons, send as new message
+            else:
+                await self.bot.send_message(chat_id, text, reply_markup=reply_markup, parse_mode=parse_mode)
+        except Exception as e:
+            self.logger.error(f"Error in _send_or_edit (chat_id={chat_id}, message_id={message_id}): {e}", exc_info=True)
+            if "message is not modified" not in str(e).lower() and message_id: # If edit failed and it wasn't "not modified"
+                try: # Try sending as a new message
                     await self.bot.send_message(chat_id, text, reply_markup=reply_markup, parse_mode=parse_mode)
-                # If message not modified, do nothing or log
-        else:
-            await self.bot.send_message(chat_id, text, reply_markup=reply_markup, parse_mode=parse_mode)
+                except Exception as e2:
+                    self.logger.error(f"Fallback send_message also failed in _send_or_edit: {e2}", exc_info=True)
+
 
     # --- Handler Registration ---
     def _register_handlers(self):
+        # Global Cancel Command
+        self.bot.message_handler(commands=['cancel'], state='*')(self.handle_cancel)
+
         # General Commands & Callbacks
         self.bot.message_handler(commands=['start'])(self.handle_start)
         self.bot.message_handler(commands=['balance'])(self.handle_balance_command)
@@ -109,7 +129,7 @@ class BotApp:
         self.bot.callback_query_handler(func=lambda call: call.data == 'token_info')(self.handle_token_info_callback)
         self.bot.message_handler(commands=['marketcap'])(self.handle_market_cap_command)
         self.bot.callback_query_handler(func=lambda call: call.data == 'show_marketcap')(self.handle_market_cap_callback)
-        self.bot.callback_query_handler(func=lambda call: call.data == 'main_menu')(self.handle_main_menu_callback)
+        self.bot.callback_query_handler(func=lambda call: call.data == 'main_menu', state='*')(self.handle_main_menu_callback) # Allow main_menu from any state
 
         # Send Flow States & Callbacks
         self.bot.message_handler(state=UserStates.WAITING_FOR_RECIPIENT)(self.handle_waiting_for_recipient)
@@ -124,8 +144,8 @@ class BotApp:
         self.bot.message_handler(state=UserStates.ADMIN_MINT_AMOUNT)(self.handle_admin_mint_amount_input)
 
         # Farming Menu Callbacks & States
-        self.bot.callback_query_handler(func=lambda call: call.data == 'go_farming_menu')(self.handle_go_farming_menu)
-        self.bot.callback_query_handler(func=lambda call: call.data == 'farm_my_stakes', state=[UserStates.FARMING_MENU, None])(self.handle_farm_my_stakes) # Allow from None state too
+        self.bot.callback_query_handler(func=lambda call: call.data == 'go_farming_menu', state='*')(self.handle_go_farming_menu)
+        self.bot.callback_query_handler(func=lambda call: call.data == 'farm_my_stakes', state=[UserStates.FARMING_MENU, None])(self.handle_farm_my_stakes)
         self.bot.callback_query_handler(func=lambda call: call.data == 'farm_stake_hkn', state=UserStates.FARMING_MENU)(self.handle_farm_stake_hkn_prompt)
         self.bot.message_handler(state=UserStates.STAKING_AMOUNT)(self.handle_staking_amount_input)
 
@@ -140,13 +160,38 @@ class BotApp:
         self.bot.callback_query_handler(func=lambda call: call.data.startswith('buy_booster_'), state=UserStates.BOOSTER_STORE)(self.handle_buy_booster_prompt)
         self.bot.callback_query_handler(func=lambda call: call.data.startswith('confirm_buy_booster_') or call.data == 'go_booster_store_cancel', state=UserStates.CONFIRM_BUY_BOOSTER)(self.handle_buy_booster_confirmation)
 
-        # Sell HKN
-        self.bot.callback_query_handler(func=lambda call: call.data == 'sell_hkn_prompt', state=[None, UserStates.FARMING_MENU])(self.handle_sell_hkn_prompt) # Accessible from main or farming menu if state is clear
+        # Sell HKN Callbacks & States
+        self.bot.callback_query_handler(func=lambda call: call.data == 'sell_hkn_prompt', state='*')(self.handle_sell_hkn_prompt)
         self.bot.message_handler(state=UserStates.SELLING_HKN_AMOUNT)(self.handle_sell_hkn_amount_input)
+
+    # --- Global Cancel Handler ---
+    async def handle_cancel(self, message):
+        user_id = message.from_user.id
+        chat_id = message.chat.id
+        current_state_str = await self.bot.get_state(user_id, chat_id)
+        self.logger.info(f"User {user_id} initiated /cancel from state: {current_state_str}")
+
+        # Define states that are considered "menus" or "neutral" and shouldn't be cancelled by simple /cancel
+        # Comparing string representations of states
+        non_cancelable_states = [
+            None, # No state
+            str(UserStates.FARMING_MENU),
+            str(UserStates.BOOSTER_STORE)
+        ]
+
+        if current_state_str not in non_cancelable_states:
+            await self.bot.delete_state(user_id, chat_id)
+            self.logger.info(f"State for user {user_id} cleared due to /cancel.")
+            await self.bot.send_message(chat_id, "Действие отменено.")
+            await self.bot.send_message(chat_id, "🏠 Главное меню:", reply_markup=self._main_menu_keyboard())
+        else:
+            self.logger.info(f"User {user_id} in non-cancelable state {current_state_str}. Showing main menu.")
+            await self.bot.send_message(chat_id, "Нет активного действия для отмены. Возврат в главное меню.", reply_markup=self._main_menu_keyboard())
 
 
     # --- General Handlers ---
     async def handle_start(self, message):
+        # ... (logging can be added here if desired, e.g., self.logger.info(f"User {message.from_user.id} started bot"))
         user_id = message.from_user.id
         username = message.from_user.username
         wallet = await self.ledger_manager.get_wallet(user_id)
@@ -159,6 +204,90 @@ class BotApp:
         else:
             await self.bot.send_message(user_id, "Снова здравствуйте!", reply_markup=self._main_menu_keyboard())
 
+    async def handle_waiting_for_recipient(self, message):
+        chat_id = message.chat.id
+        user_id = message.from_user.id
+        recipient_str = message.text.strip()
+        actual_recipient_str = recipient_str
+        try:
+            if recipient_str.startswith('@'):
+                recipient_username = recipient_str[1:]
+                # TODO: Consider moving username-to-ID lookup to LedgerManager
+                recipient_wallet_row = await self.ledger_manager.db_manager.fetch_one("SELECT user_id, username FROM wallets WHERE username = ?", (recipient_username,))
+                if not recipient_wallet_row:
+                    await self.bot.send_message(chat_id, "Получатель (username) не найден. Попробуйте ID:")
+                    return
+                recipient_id = recipient_wallet_row['user_id']
+                actual_recipient_str = f"@{recipient_wallet_row['username']}"
+            else:
+                recipient_id = int(recipient_str)
+                recipient_wallet_check = await self.ledger_manager.get_wallet(recipient_id)
+                if not recipient_wallet_check:
+                    await self.bot.send_message(chat_id, "Получатель (ID) не найден. Попробуйте снова:"); return
+        except ValueError:
+            await self.bot.send_message(chat_id, "Неверный формат. Введите ID (число) или username (@):")
+            return
+        if recipient_id == user_id:
+            await self.bot.send_message(chat_id, "Нельзя отправить себе. Введите другого получателя:")
+            return
+
+        async with self.bot.retrieve_data(user_id, chat_id) as data:
+            data['recipient_id'] = recipient_id
+            data['recipient_str'] = actual_recipient_str
+        await self.bot.set_state(user_id, UserStates.WAITING_FOR_AMOUNT, chat_id)
+        await self.bot.send_message(chat_id, f"Получатель: {actual_recipient_str}. Введите сумму для перевода:")
+
+
+    async def _process_send_direct(self, message, recipient_str_arg, amount_str_arg):
+        user_id = message.from_user.id
+        chat_id = message.chat.id
+        actual_recipient_str = recipient_str_arg
+
+        sender_wallet = await self.ledger_manager.get_wallet(user_id) # Check sender's wallet first
+        if not sender_wallet:
+            self.logger.error(f"Sender wallet not found for user {user_id} in _process_send_direct.")
+            await self.bot.send_message(chat_id, "Ошибка: Ваш кошелек не найден. Пожалуйста, используйте /start."); return
+
+        try:
+            amount = float(amount_str_arg)
+            if amount <= 0: raise ValueError("Amount must be positive")
+        except ValueError:
+            await self.bot.send_message(chat_id, "Неверный формат суммы."); return
+
+        if sender_wallet.balance < amount:
+            await self.bot.send_message(chat_id, "Недостаточно средств на вашем балансе."); return
+
+        try:
+            if recipient_str_arg.startswith('@'):
+                recipient_username = recipient_str_arg[1:]
+                # TODO: Consider moving username-to-ID lookup to LedgerManager
+                recipient_wallet_row = await self.ledger_manager.db_manager.fetch_one("SELECT user_id, username FROM wallets WHERE username = ?", (recipient_username,))
+                if not recipient_wallet_row:
+                    await self.bot.send_message(chat_id, "Получатель (username) не найден."); return
+                recipient_id = recipient_wallet_row['user_id']
+                actual_recipient_str = f"@{recipient_wallet_row['username']}"
+            else:
+                recipient_id = int(recipient_str_arg)
+                recipient_wallet_check = await self.ledger_manager.get_wallet(recipient_id)
+                if not recipient_wallet_check:
+                     await self.bot.send_message(chat_id, "Получатель (ID) не найден."); return
+        except ValueError:
+            await self.bot.send_message(chat_id, "Неверный формат ID/username получателя."); return
+
+        if recipient_id == user_id:
+            await self.bot.send_message(chat_id, "Нельзя отправить HKN самому себе."); return
+
+        async with self.bot.retrieve_data(user_id, chat_id) as data:
+            data['recipient_id'] = recipient_id
+            data['amount'] = amount
+            data['recipient_str'] = actual_recipient_str
+
+        await self.bot.send_message(chat_id,
+                                    f"Подтвердите перевод: `{amount:.{self.token_config.DECIMALS}f} {self.token_config.SYMBOL}` пользователю *{actual_recipient_str}*?",
+                                    reply_markup=self._confirm_send_keyboard(), parse_mode='Markdown')
+        await self.bot.set_state(user_id, UserStates.CONFIRMING_SEND, chat_id)
+
+    # ... (other handlers remain largely the same, can add logging as needed) ...
     async def handle_balance_command(self, message):
         await self._show_balance(message.chat.id, message.from_user.id)
 
@@ -171,75 +300,6 @@ class BotApp:
         wallet = await self.ledger_manager.get_wallet(user_id)
         text = f"Ваш баланс: `{wallet.balance:.{self.token_config.DECIMALS}f} {self.token_config.SYMBOL}`" if wallet else "Ваш кошелек не найден. Пожалуйста, используйте /start."
         await self._send_or_edit(chat_id, text, reply_markup=self._main_menu_keyboard(), parse_mode='Markdown', message_id=message_id)
-
-    async def handle_send_hkn_callback(self, call):
-        await self.bot.answer_callback_query(call.id)
-        await self.bot.set_state(call.from_user.id, UserStates.WAITING_FOR_RECIPIENT, call.message.chat.id)
-        await self._send_or_edit(call.message.chat.id, "Введите Telegram ID или username (@) получателя:", message_id=call.message.message_id)
-
-    async def handle_send_command(self, message):
-        args = message.text.split()
-        if len(args) == 3:
-            await self._process_send_direct(message, args[1], args[2])
-        else:
-            await self.bot.set_state(message.from_user.id, UserStates.WAITING_FOR_RECIPIENT, message.chat.id)
-            await self.bot.send_message(message.chat.id, "Введите Telegram ID или username (@) получателя:")
-
-    async def handle_waiting_for_recipient(self, message):
-        chat_id = message.chat.id
-        user_id = message.from_user.id
-        recipient_str = message.text.strip()
-        try:
-            if recipient_str.startswith('@'):
-                recipient_username = recipient_str[1:]
-                recipient_wallet_row = await self.ledger_manager.db_manager.fetch_one("SELECT user_id FROM wallets WHERE username = ?", (recipient_username,)) # TODO: Move to ledger
-                if not recipient_wallet_row:
-                    await self.bot.send_message(chat_id, "Username не найден. Попробуйте ID:")
-                    return
-                recipient_id = recipient_wallet_row['user_id']
-            else:
-                recipient_id = int(recipient_str)
-        except ValueError:
-            await self.bot.send_message(chat_id, "Неверный формат. Введите ID (число) или username (@):")
-            return
-        if recipient_id == user_id:
-            await self.bot.send_message(chat_id, "Нельзя отправить себе. Введите другого получателя:")
-            return
-        if not await self.ledger_manager.get_wallet(recipient_id):
-            await self.bot.send_message(chat_id, "Кошелек получателя не найден. Введите другого:")
-            return
-        async with self.bot.retrieve_data(user_id, chat_id) as data:
-            data['recipient_id'] = recipient_id
-            data['recipient_str'] = recipient_str # Store for display
-        await self.bot.set_state(user_id, UserStates.WAITING_FOR_AMOUNT, chat_id)
-        await self.bot.send_message(chat_id, f"Получатель: {recipient_str}. Введите сумму для перевода:")
-
-    async def handle_waiting_for_amount(self, message):
-        chat_id = message.chat.id
-        user_id = message.from_user.id
-        amount_str = message.text.strip()
-        try:
-            amount = float(amount_str)
-            if amount <= 0: raise ValueError("Amount must be positive")
-        except ValueError:
-            await self.bot.send_message(chat_id, "Неверная сумма. Введите положительное число:")
-            return
-        async with self.bot.retrieve_data(user_id, chat_id) as data:
-            recipient_id = data.get('recipient_id')
-            recipient_str = data.get('recipient_str', str(recipient_id)) # Fallback to ID if str not stored
-            if not recipient_id:
-                await self.bot.send_message(chat_id, "Ошибка: ID получателя не найден. Начните заново.", reply_markup=self._main_menu_keyboard())
-                await self.bot.delete_state(user_id, chat_id)
-                return
-            data['amount'] = amount
-        sender_wallet = await self.ledger_manager.get_wallet(user_id)
-        if not sender_wallet or sender_wallet.balance < amount:
-            await self.bot.send_message(chat_id, "Недостаточно средств. Введите меньшую сумму:")
-            return
-        await self.bot.send_message(chat_id,
-                                    f"Подтвердите: `{amount:.{self.token_config.DECIMALS}f} {self.token_config.SYMBOL}` для *{recipient_str}*?",
-                                    reply_markup=self._confirm_send_keyboard(), parse_mode='Markdown')
-        await self.bot.set_state(user_id, UserStates.CONFIRMING_SEND, chat_id)
 
     async def handle_send_confirmation_callback(self, call):
         await self.bot.answer_callback_query(call.id)
@@ -254,34 +314,18 @@ class BotApp:
                 recipient_str = data.get('recipient_str', str(recipient_id))
             if not recipient_id or amount is None:
                 response_text = "Ошибка: детали перевода не найдены. Попробуйте снова."
+                self.logger.warning(f"Transfer confirmation failed for user {user_id}: missing recipient_id or amount in state data.")
             else:
                 success, op_message = await self.ledger_manager.execute_transfer(user_id, recipient_id, amount)
                 if success:
                     response_text = f"Перевод `{amount:.{self.token_config.DECIMALS}f} {self.token_config.SYMBOL}` для *{recipient_str}* выполнен."
+                    self.logger.info(f"Transfer successful: {user_id} to {recipient_id}, amount {amount}")
                 else:
-                    response_text = op_message or "Ошибка перевода."
+                    response_text = op_message if op_message else "Ошибка при выполнении перевода."
+                    self.logger.error(f"Transfer failed for user {user_id} to {recipient_id}, amount {amount}. Reason: {op_message}")
+
         await self._send_or_edit(chat_id, response_text, reply_markup=self._main_menu_keyboard(), parse_mode='Markdown', message_id=message_id)
         await self.bot.delete_state(user_id, chat_id)
-
-    async def _process_send_direct(self, message, recipient_str, amount_str):
-        # Similar logic to interactive send, but starts from /send command
-        user_id = message.from_user.id
-        chat_id = message.chat.id
-        # (Validation logic as in handle_waiting_for_recipient and handle_waiting_for_amount)
-        # For brevity, assuming validation passes and we proceed to confirmation data storage
-        try:
-            recipient_id = int(recipient_str) # Simplified for example, add @username handling
-            amount = float(amount_str)
-            if amount <=0: raise ValueError()
-             # Check balance, recipient exists etc.
-            async with self.bot.retrieve_data(user_id, chat_id) as data:
-                data['recipient_id'] = recipient_id; data['amount'] = amount; data['recipient_str'] = recipient_str
-            await self.bot.send_message(chat_id, f"Подтвердите (из /send): `{amount:.{self.token_config.DECIMALS}f} {self.token_config.SYMBOL}` для *{recipient_str}*?",
-                                        reply_markup=self._confirm_send_keyboard(), parse_mode='Markdown')
-            await self.bot.set_state(user_id, UserStates.CONFIRMING_SEND, chat_id)
-        except ValueError:
-            await self.bot.send_message(chat_id, "Неверный формат команды /send. Используйте /send <ID/@username> <сумма>")
-
 
     async def handle_history_command(self, message):
         await self._show_history(message.chat.id, message.from_user.id)
@@ -351,7 +395,6 @@ class BotApp:
         await self.bot.set_state(call.from_user.id, None, call.message.chat.id)
         await self._send_or_edit(call.message.chat.id, "🏠 Главное меню:", reply_markup=self._main_menu_keyboard(), message_id=call.message.message_id)
 
-    # --- Admin Handlers ---
     async def handle_admin_set_price_command(self, message):
         if not await self._is_admin(message.from_user.id): await self.bot.send_message(message.chat.id, "Нет прав."); return
         await self.bot.set_state(message.from_user.id, UserStates.ADMIN_SET_PRICE, message.chat.id)
@@ -399,8 +442,7 @@ class BotApp:
             await self.bot.delete_state(user_id, chat_id)
             await self.bot.send_message(chat_id, "Эмиссия завершена.", reply_markup=self._main_menu_keyboard())
 
-    # --- Farming Handlers ---
-    async def handle_go_farming_menu(self, call_or_message): # Can be called or from message
+    async def handle_go_farming_menu(self, call_or_message):
         user_id = call_or_message.from_user.id
         chat_id = call_or_message.chat.id if hasattr(call_or_message, 'chat') else call_or_message.message.chat.id
         message_id = call_or_message.message.message_id if hasattr(call_or_message, 'message') else None
@@ -417,7 +459,6 @@ class BotApp:
         if not stakes: text = "У вас пока нет активных стейков."
         else:
             for stake in stakes:
-                # Assuming stake['created_at'] is already a formatted string or datetime object from LedgerManager
                 created_at_str = stake['created_at']
                 if isinstance(stake['created_at'], datetime):
                     created_at_str = stake['created_at'].strftime('%Y-%m-%d %H:%M')
@@ -440,7 +481,8 @@ class BotApp:
             success, msg = await self.ledger_manager.stake_tokens(user_id, amount)
             await self.bot.send_message(chat_id, msg)
             await self.bot.delete_state(user_id, chat_id)
-            await self.handle_go_farming_menu(message) # Show farming menu again
+            await self.bot.send_message(chat_id, "🌾 Меню Фарминга и Стейкинга:", reply_markup=self._farming_menu_keyboard())
+            await self.bot.set_state(user_id, UserStates.FARMING_MENU, chat_id)
         except ValueError: await self.bot.send_message(chat_id, "Введите корректное число.")
 
     async def handle_farm_unstake_hkn_prompt(self, call):
@@ -458,8 +500,9 @@ class BotApp:
         user_id = call.from_user.id
         stake_id = int(call.data.split('_')[-1])
         success, message = await self.ledger_manager.unstake_tokens(user_id, stake_id)
-        await self._send_or_edit(call.message.chat.id, message, reply_markup=self._farming_menu_keyboard(), message_id=call.message.message_id)
+        await self._send_or_edit(call.message.chat.id, message, message_id=call.message.message_id)
         await self.bot.set_state(user_id, UserStates.FARMING_MENU, call.message.chat.id)
+        await self.bot.send_message(call.message.chat.id, "🌾 Меню Фарминга и Стейкинга:", reply_markup=self._farming_menu_keyboard())
 
 
     async def handle_farm_claim_rewards_prompt(self, call):
@@ -478,8 +521,10 @@ class BotApp:
         user_id = call.from_user.id
         stake_id = int(call.data.split('_')[-1])
         success, message = await self.ledger_manager.claim_rewards(user_id, stake_id)
-        await self._send_or_edit(call.message.chat.id, message, reply_markup=self._farming_menu_keyboard(), message_id=call.message.message_id)
+        await self._send_or_edit(call.message.chat.id, message, message_id=call.message.message_id)
         await self.bot.set_state(user_id, UserStates.FARMING_MENU, call.message.chat.id)
+        await self.bot.send_message(call.message.chat.id, "🌾 Меню Фарминга и Стейкинга:", reply_markup=self._farming_menu_keyboard())
+
 
     async def handle_farm_boosters_store(self, call):
         await self.bot.answer_callback_query(call.id)
@@ -504,7 +549,7 @@ class BotApp:
         booster_config = self.ledger_manager.booster_types[booster_key]
         markup = InlineKeyboardMarkup(row_width=2).add(
             InlineKeyboardButton(f"✅ Да ({booster_config['cost']:.{self.token_config.DECIMALS}f} HKN)", callback_data=f"confirm_buy_booster_{booster_key}"),
-            InlineKeyboardButton("❌ Нет", callback_data="go_farming_menu")) # Changed cancel to go_farming_menu for simplicity
+            InlineKeyboardButton("❌ Нет", callback_data="go_booster_store_cancel"))
         await self.bot.set_state(user_id, UserStates.CONFIRM_BUY_BOOSTER, call.message.chat.id)
         await self._send_or_edit(call.message.chat.id, f"Купить '{booster_config['name_ru']}' за {booster_config['cost']:.{self.token_config.DECIMALS}f} HKN?",
                                  reply_markup=markup, message_id=call.message.message_id)
@@ -514,28 +559,27 @@ class BotApp:
         user_id = call.from_user.id
         chat_id = call.message.chat.id
         message_id = call.message.message_id
+
+        final_text = ""
         if call.data.startswith("confirm_buy_booster_"):
             booster_key = call.data.replace("confirm_buy_booster_", "")
             success, message = await self.ledger_manager.buy_booster(user_id, booster_key)
-            await self._send_or_edit(chat_id, message, message_id=message_id) # Edit current message with result
-        else: # Cancelled ("go_farming_menu" or other)
-             await self._send_or_edit(chat_id, "Покупка отменена.", message_id=message_id)
-        # Always go back to farming menu after a buy attempt or cancel
-        await self.bot.set_state(user_id, UserStates.FARMING_MENU, chat_id)
-        # Send a new message for the farming menu to ensure it's fresh and below the action result.
-        await self.bot.send_message(chat_id, "🌾 Меню Фарминга и Стейкинга:", reply_markup=self._farming_menu_keyboard())
+            final_text = f"{message}\n\n🌾 Меню Фарминга и Стейкинга:" # Append menu text
+        elif call.data == "go_booster_store_cancel":
+             final_text = "Покупка отменена.\n\n🌾 Меню Фарминга и Стейкинга:"
 
-    # --- Sell HKN Handlers ---
+        await self.bot.set_state(user_id, UserStates.FARMING_MENU, chat_id)
+        # Edit the current message (which was the confirmation prompt) to show the result and the farming menu
+        await self._send_or_edit(chat_id, final_text, reply_markup=self._farming_menu_keyboard(), message_id=message_id, parse_mode='Markdown')
+
+
     async def handle_sell_hkn_prompt(self, call):
         await self.bot.answer_callback_query(call.id)
         user_id = call.from_user.id
         chat_id = call.message.chat.id
         message_id = call.message.message_id
-
-        # Display current HKN selling rate (conceptual)
         sell_rate_info = (f"Текущий курс продажи: 1 HKN = {self.ledger_manager.HKN_SELL_RATE_TO_BOTUSD} BotUSD (концептуально).\n\n"
                           "Введите сумму HKN, которую хотите продать системе:")
-
         await self.bot.set_state(user_id, UserStates.SELLING_HKN_AMOUNT, chat_id)
         await self._send_or_edit(chat_id, sell_rate_info, message_id=message_id)
 
@@ -543,30 +587,36 @@ class BotApp:
     async def handle_sell_hkn_amount_input(self, message):
         user_id = message.from_user.id
         chat_id = message.chat.id
-
         try:
             amount_hkn = float(message.text.strip())
         except ValueError:
             await self.bot.send_message(chat_id, "Неверный формат суммы. Пожалуйста, введите число (например, 100 или 50.5).")
-            # Keep state SELLING_HKN_AMOUNT for user to retry
             return
-
         success, response_message = await self.ledger_manager.sell_hkn_to_system(user_id, amount_hkn)
-
         await self.bot.send_message(chat_id, response_message)
         await self.bot.delete_state(user_id, chat_id)
-
-        # Send main menu after the operation
         await self.bot.send_message(chat_id, "🏠 Главное меню:", reply_markup=self._main_menu_keyboard())
 
 
     def run(self):
-        asyncio.run(self.bot.polling())
+        try:
+            app_logger.info("Bot starting...")
+            asyncio.run(self.bot.polling(non_stop=True, timeout=30, long_polling_timeout = 30)) # Added non_stop and timeout
+        except Exception as e:
+            app_logger.critical(f"Bot polling loop critical error: {e}", exc_info=True)
+        finally:
+            app_logger.info("Bot stopped.")
+
 
 if __name__ == "__main__":
     bot_config = BotConfig()
+    # Initialize DatabaseManager and LedgerManager (consider passing logger here too if they need it)
     db_manager = DatabaseManager(bot_config.DB_PATH)
-    asyncio.run(db_manager.init_db())
+    asyncio.run(db_manager.init_db()) # Ensure DB is initialized
+
     ledger_manager = LedgerManager(db_manager)
+
     bot_app = BotApp(bot_config.BOT_TOKEN, bot_config.ADMIN_IDS, ledger_manager)
     bot_app.run()
+
+[end of main .py]

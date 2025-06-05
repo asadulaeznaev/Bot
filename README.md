@@ -32,11 +32,18 @@ The bot includes features for users to earn more HelgyKoin (HKN) through farming
     *   Users can sell their HKN back to the bot system at a predetermined conceptual rate (e.g., for "BotUSD").
     *   This feature is accessible via the "🏦 Продать HKN" button in the main menu.
 
+## Code Quality and Reliability
+
+*   **Logging:** The bot implements logging to both the console and a `bot.log` file. This captures key events, informational messages, and errors for easier debugging and monitoring.
+*   **Error Handling:** Enhanced error handling is in place, especially for database interactions and core application logic, aiming to provide more stability and user-friendly feedback on issues.
+*   **Modular Design:** The codebase is organized into separate modules for configuration, database management, core ledger logic, bot states, and the main application, improving maintainability.
+
 ## Prerequisites
 
 *   Python 3.7+
 *   `aiosqlite` library
 *   `pyTelegramBotAPI` library
+(See `requirements.txt` for exact versions)
 
 ## Setup Instructions
 
@@ -47,13 +54,12 @@ The bot includes features for users to earn more HelgyKoin (HKN) through farming
     ```
 
 2.  **Install dependencies:**
-    It's recommended to use a virtual environment.
+    It's recommended to use a virtual environment. The `run_bot.sh` script (for Linux/macOS) can automate this. If setting up manually:
     ```bash
-    python -m venv venv
+    python3 -m venv venv  # Or python -m venv venv
     source venv/bin/activate  # On Windows use `venv\Scripts\activate`
     pip install -r requirements.txt
     ```
-    *(The `requirements.txt` file should now exist in the repository).*
 
 3.  **Configure the Bot:**
     Open `config.py` and set your actual bot token and admin ID(s):
@@ -65,18 +71,29 @@ The bot includes features for users to earn more HelgyKoin (HKN) through farming
     ```
 
 4.  **Initialize the Database (if running for the first time):**
-    The bot will attempt to create and initialize the database (`helgykoin.db`) on its first run. This includes creating all necessary tables.
+    The bot (or `run_bot.sh` script) will attempt to create and initialize the database (`helgykoin.db`) on its first run. This includes creating all necessary tables.
 
-5.  **Note on Updates:** If you are updating from an older version of the bot, and new database tables have been added (like `stakes` or `active_boosters`), you might need to delete your existing `helgykoin.db` file to allow the bot to create it fresh with the new schema. Make sure to back up any important data if necessary. A more robust solution would be a migration system, but for this project, this note serves as guidance.
+5.  **Note on Updates:** If you are updating from an older version of the bot and new database tables have been added (like `stakes` or `active_boosters`), you might need to delete your existing `helgykoin.db` file to allow the bot to create it fresh with the new schema. **Make sure to back up any important data if necessary.** A more robust solution would be a migration system, but for this project, this note serves as guidance.
 
 
 ## Running the Bot
 
-Once the setup is complete, you can run the bot using:
+**Recommended (Linux/macOS):**
 
+Use the provided startup script. This will handle virtual environment creation and dependency installation automatically.
 ```bash
-python "main .py"
+chmod +x run_bot.sh  # Ensure it's executable (usually only needed once)
+./run_bot.sh
 ```
-*(Note the space in "main .py" if you haven't renamed it).*
 
-Make sure your virtual environment is activated if you used one. The bot will start polling for messages.
+**Alternative (Windows or Manual):**
+
+1.  Ensure your virtual environment is created and activated (e.g., `venv\Scripts\activate` on Windows).
+2.  Ensure dependencies are installed: `pip install -r requirements.txt`.
+3.  Run the main script:
+    ```bash
+    python "main .py"
+    ```
+    *(Note the space in "main .py" if you are running it manually without the script).*
+
+Make sure your virtual environment is activated if you used one. The bot will start polling for messages. It's recommended to check `bot.log` for any runtime information or errors.
