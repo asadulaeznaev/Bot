@@ -1,223 +1,25 @@
 import os
-import aiosqlite
 import asyncio
-from dataclasses import dataclass
+# Removed aiosqlite and dataclass as they are no longer directly used in main .py
 from telebot.async_telebot import AsyncTeleBot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
-from telebot.handler_backends import State, StatesGroup
+# Removed State, StatesGroup as they are in bot_states.py
 from telebot.asyncio_filters import StateFilter
 
-class BotConfig:
-    BOT_TOKEN = "7861260810:AAEuI-huruUCJyNPgnMbck2t2AnY4pJejD8"
-    ADMIN_IDS = [6328016694]
-    DB_PATH = "helgykoin.db"
-
-class TokenConfig:
-    NAME = "HelgyKoin"
-    SYMBOL = "HKN"
-    DECIMALS = 8
-    TOTAL_SUPPLY = 1_000_000_000.0
-    INITIAL_PRICE = 0.0001
-    STARTUP_BONUS = 100.0
-
-@dataclass
-class Token:
-    name: str
-    symbol: str
-    decimals: int
-    total_supply: float
-    current_price: float
-
-@dataclass
-class Wallet:
-    user_id: int
-    username: str
-    balance: float
-    created_at: str
-
-@dataclass
-class Transaction:
-    id: int
-    timestamp: str
-    sender_id: int
-    receiver_id: int
-    amount: float
-    description: str | None
-
-class DatabaseManager:
-    def __init__(self, db_path):
-        self.db_path = db_path
-
-    async def init_db(self):
-        async with aiosqlite.connect(self.db_path) as db:
-            await db.execute('''
-                CREATE TABLE IF NOT EXISTS wallets (
-                    user_id INTEGER PRIMARY KEY,
-                    username TEXT,
-                    balance REAL NOT NULL DEFAULT 0.0,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                )
-            ''')
-            await db.execute('''
-                CREATE TABLE IF NOT EXISTS transactions (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    sender_id INTEGER,
-                    receiver_id INTEGER,
-                    amount REAL NOT NULL,
-                    description TEXT
-                )
-            ''')
-            await db.execute('''
-                CREATE TABLE IF NOT EXISTS token_info (
-                    id INTEGER PRIMARY KEY DEFAULT 1,
-                    current_price REAL NOT NULL,
-                    total_supply REAL NOT NULL,
-                    name TEXT NOT NULL,
-                    symbol TEXT NOT NULL,
-                    decimals INTEGER NOT NULL
-                )
-            ''')
-            await db.execute('''
-                INSERT OR IGNORE INTO token_info (id, current_price, total_supply, name, symbol, decimals)
-                VALUES (1, ?, ?, ?, ?, ?)
-            ''', (TokenConfig.INITIAL_PRICE, TokenConfig.TOTAL_SUPPLY, TokenConfig.NAME, TokenConfig.SYMBOL, TokenConfig.DECIMALS))
-            await db.commit()
-
-    async def execute_query(self, query, params=None):
-        params = params or ()
-        async with aiosqlite.connect(self.db_path) as db:
-            await db.execute(query, params)
-            await db.commit()
-
-    async def fetch_one(self, query, params=None):
-        params = params or ()
-        async with aiosqlite.connect(self.db_path) as db:
-            db.row_factory = aiosqlite.Row
-            cursor = await db.execute(query, params)
-            return await cursor.fetchone()
-
-    async def fetch_all(self, query, params=None):
-        params = params or ()
-        async with aiosqlite.connect(self.db_path) as db:
-            db.row_factory = aiosqlite.Row
-            cursor = await db.execute(query, params)
-            return await cursor.fetchall()
-
-class LedgerManager:
-    def __init__(self, db_manager: DatabaseManager):
-        self.db_manager = db_manager
-
-    async def create_wallet(self, user_id: int, username: str) -> Wallet:
-        await self.db_manager.execute_query(
-            "INSERT INTO wallets (user_id, username, balance) VALUES (?, ?, ?)",
-            (user_id, username, TokenConfig.STARTUP_BONUS)
-        )
-        return Wallet(user_id, username, TokenConfig.STARTUP_BONUS, "now")
-
-    async def get_wallet(self, user_id: int) -> Wallet | None:
-        row = await self.db_manager.fetch_one("SELECT * FROM wallets WHERE user_id = ?", (user_id,))
-        return Wallet(**row) if row else None
-
-    async def update_balance(self, user_id: int, amount: float):
-        await self.db_manager.execute_query(
-            "UPDATE wallets SET balance = balance + ? WHERE user_id = ?",
-            (amount, user_id)
-        )
-
-    async def execute_transfer(self, sender_id: int, receiver_id: int, amount: float) -> bool:
-        sender_wallet = await self.get_wallet(sender_id)
-        receiver_wallet = await self.get_wallet(receiver_id)
-
-        if not sender_wallet or not receiver_wallet:
-            return False
-        if sender_wallet.balance < amount:
-            return False
-        if amount <= 0:
-            return False
-
-        async with aiosqlite.connect(self.db_manager.db_path) as db:
-            await db.execute("BEGIN TRANSACTION")
-            try:
-                await db.execute("UPDATE wallets SET balance = balance + ? WHERE user_id = ?", (-amount, sender_id))
-                await db.execute("UPDATE wallets SET balance = balance + ? WHERE user_id = ?", (amount, receiver_id))
-                await db.execute(
-                    "INSERT INTO transactions (sender_id, receiver_id, amount) VALUES (?, ?, ?)",
-                    (sender_id, receiver_id, amount)
-                )
-                await db.commit()
-                return True
-            except Exception:
-                await db.rollback()
-                return False
-
-    async def get_token_info(self) -> Token:
-        row = await self.db_manager.fetch_one("SELECT * FROM token_info WHERE id = 1")
-        return Token(**row)
-
-    async def calculate_market_cap(self) -> float:
-        token_info_obj = await self.get_token_info()
-        return token_info_obj.total_supply * token_info_obj.current_price
-
-    async def set_token_price(self, new_price: float):
-        await self.db_manager.execute_query(
-            "UPDATE token_info SET current_price = ? WHERE id = 1",
-            (new_price,)
-        )
-
-    async def mint_tokens(self, user_id: int, amount: float) -> bool:
-        wallet = await self.get_wallet(user_id)
-        if not wallet:
-            return False
-        if amount <= 0:
-            return False
-
-        current_token_info = await self.get_token_info()
-        new_total_supply = current_token_info.total_supply + amount
-
-        async with aiosqlite.connect(self.db_manager.db_path) as db:
-            await db.execute("BEGIN TRANSACTION")
-            try:
-                await db.execute("UPDATE wallets SET balance = balance + ? WHERE user_id = ?", (amount, user_id))
-                await db.execute(
-                    "UPDATE token_info SET total_supply = ? WHERE id = 1",
-                    (new_total_supply,)
-                )
-                await db.execute(
-                    "INSERT INTO transactions (sender_id, receiver_id, amount, description) VALUES (?, ?, ?, ?)",
-                    (0, user_id, amount, "Minted by admin")
-                )
-                await db.commit()
-                return True
-            except Exception:
-                await db.rollback()
-                return False
-
-    async def get_transaction_history(self, user_id: int, limit: int = 5, offset: int = 0):
-        rows = await self.db_manager.fetch_all(
-            """
-            SELECT * FROM transactions
-            WHERE sender_id = ? OR receiver_id = ?
-            ORDER BY timestamp DESC
-            LIMIT ? OFFSET ?
-            """,
-            (user_id, user_id, limit, offset)
-        )
-        return [Transaction(**row) for row in rows]
-
-class UserStates(StatesGroup):
-    WAITING_FOR_RECIPIENT = State()
-    WAITING_FOR_AMOUNT = State()
-    CONFIRMING_SEND = State()
-    ADMIN_SET_PRICE = State()
-    ADMIN_MINT_RECIPIENT = State()
-    ADMIN_MINT_AMOUNT = State()
+# Imports from new modules
+from config import BotConfig, TokenConfig
+# from models import Token, Wallet, Transaction # Removed as they are not directly used in main.py
+from database import DatabaseManager
+from ledger import LedgerManager
+from bot_states import UserStates
 
 class BotApp:
     def __init__(self, token: str, admin_ids: list[int], ledger_manager: LedgerManager):
         self.bot = AsyncTeleBot(token)
         self.admin_ids = admin_ids
         self.ledger_manager = ledger_manager
+        # Make sure TokenConfig is available for formatting strings
+        self.token_config = TokenConfig()
         self.bot.add_custom_filter(StateFilter(self.bot))
         self._register_handlers()
 
@@ -282,7 +84,7 @@ class BotApp:
             await self.ledger_manager.create_wallet(user_id, username)
             await self.bot.send_message(user_id,
                                         f"Добро пожаловать в HelgyKoin! "
-                                        f"Ваш кошелек создан, и вы получили {TokenConfig.STARTUP_BONUS:.{TokenConfig.DECIMALS}f} {TokenConfig.SYMBOL} в качестве стартового бонуса.",
+                                        f"Ваш кошелек создан, и вы получили {self.token_config.STARTUP_BONUS:.{self.token_config.DECIMALS}f} {self.token_config.SYMBOL} в качестве стартового бонуса.",
                                         reply_markup=self._main_menu_keyboard())
         else:
             await self.bot.send_message(user_id, "Снова здравствуйте!", reply_markup=self._main_menu_keyboard())
@@ -297,7 +99,7 @@ class BotApp:
     async def _show_balance(self, chat_id, user_id, message_id=None):
         wallet = await self.ledger_manager.get_wallet(user_id)
         if wallet:
-            balance_str = f"Ваш баланс: `{wallet.balance:.{TokenConfig.DECIMALS}f} {TokenConfig.SYMBOL}`"
+            balance_str = f"Ваш баланс: `{wallet.balance:.{self.token_config.DECIMALS}f} {self.token_config.SYMBOL}`"
             if message_id:
                 await self.bot.edit_message_text(balance_str, chat_id, message_id, reply_markup=self._balance_menu_keyboard(), parse_mode='Markdown')
             else:
@@ -382,7 +184,7 @@ class BotApp:
         recipient_info = recipient_wallet.username if recipient_wallet and recipient_wallet.username else str(recipient_id)
 
         await self.bot.send_message(chat_id,
-                                    f"Подтвердите перевод `{amount:.{TokenConfig.DECIMALS}f} {TokenConfig.SYMBOL}` пользователю *{recipient_info}*?",
+                                    f"Подтвердите перевод `{amount:.{self.token_config.DECIMALS}f} {self.token_config.SYMBOL}` пользователю *{recipient_info}*?",
                                     reply_markup=self._confirm_send_keyboard(), parse_mode='Markdown')
         await self.bot.set_state(user_id, UserStates.CONFIRMING_SEND, chat_id)
 
@@ -400,7 +202,7 @@ class BotApp:
             if success:
                 recipient_wallet = await self.ledger_manager.get_wallet(recipient_id)
                 recipient_info = recipient_wallet.username if recipient_wallet and recipient_wallet.username else str(recipient_id)
-                await self.bot.edit_message_text(f"Перевод `{amount:.{TokenConfig.DECIMALS}f} {TokenConfig.SYMBOL}` пользователю *{recipient_info}* успешно выполнен.",
+                await self.bot.edit_message_text(f"Перевод `{amount:.{self.token_config.DECIMALS}f} {self.token_config.SYMBOL}` пользователю *{recipient_info}* успешно выполнен.",
                                                  chat_id, call.message.message_id, parse_mode='Markdown', reply_markup=self._main_menu_keyboard())
             else:
                 await self.bot.edit_message_text("Ошибка при выполнении перевода. Пожалуйста, убедитесь, что у вас достаточно средств и получатель существует.",
@@ -458,7 +260,7 @@ class BotApp:
         recipient_info = recipient_wallet_exists.username if recipient_wallet_exists.username else str(recipient_id)
 
         await self.bot.send_message(chat_id,
-                                    f"Подтвердите перевод `{amount:.{TokenConfig.DECIMALS}f} {TokenConfig.SYMBOL}` пользователю *{recipient_info}*?",
+                                    f"Подтвердите перевод `{amount:.{self.token_config.DECIMALS}f} {self.token_config.SYMBOL}` пользователю *{recipient_info}*?",
                                     reply_markup=self._confirm_send_keyboard(), parse_mode='Markdown')
         await self.bot.set_state(user_id, UserStates.CONFIRMING_SEND, chat_id)
 
@@ -476,7 +278,7 @@ class BotApp:
             f"Символ: `{token_info_obj.symbol}`\n"
             f"Десятичные знаки: `{token_info_obj.decimals}`\n"
             f"Общее предложение: `{token_info_obj.total_supply:.{token_info_obj.decimals}f} {token_info_obj.symbol}`\n"
-            f"Текущая цена: `${token_info_obj.current_price:.{TokenConfig.DECIMALS}f}`"
+            f"Текущая цена: `${token_info_obj.current_price:.{self.token_config.DECIMALS}f}`"
         )
         if message_id:
             await self.bot.edit_message_text(info_message, chat_id, message_id, parse_mode='Markdown', reply_markup=self._token_info_keyboard())
@@ -492,7 +294,7 @@ class BotApp:
 
     async def _show_market_cap(self, chat_id, message_id=None):
         market_cap = await self.ledger_manager.calculate_market_cap()
-        cap_message = f"Текущая рыночная капитализация {TokenConfig.SYMBOL}: `${market_cap:.2f}`"
+        cap_message = f"Текущая рыночная капитализация {self.token_config.SYMBOL}: `${market_cap:.2f}`"
         markup = InlineKeyboardMarkup()
         markup.row(InlineKeyboardButton("ℹ️ О Токене", callback_data="token_info"))
         markup.row(InlineKeyboardButton("💰 Главное меню", callback_data="main_menu"))
@@ -520,7 +322,7 @@ class BotApp:
             if new_price <= 0:
                 raise ValueError
             await self.ledger_manager.set_token_price(new_price)
-            await self.bot.send_message(chat_id, f"Новая цена HKN установлена: `${new_price:.{TokenConfig.DECIMALS}f}`")
+            await self.bot.send_message(chat_id, f"Новая цена HKN установлена: `${new_price:.{self.token_config.DECIMALS}f}`")
         except ValueError:
             await self.bot.send_message(chat_id, "Неверный формат цены. Пожалуйста, введите положительное число.")
         finally:
@@ -572,7 +374,7 @@ class BotApp:
                 recipient_wallet = await self.ledger_manager.get_wallet(recipient_id)
                 recipient_info = recipient_wallet.username if recipient_wallet and recipient_wallet.username else str(recipient_id)
                 await self.bot.send_message(chat_id,
-                                            f"Успешно эмитировано `{amount:.{TokenConfig.DECIMALS}f} {TokenConfig.SYMBOL}` на кошелек *{recipient_info}*.",
+                                            f"Успешно эмитировано `{amount:.{self.token_config.DECIMALS}f} {self.token_config.SYMBOL}` на кошелек *{recipient_info}*.",
                                             parse_mode='Markdown')
             else:
                 await self.bot.send_message(chat_id, "Ошибка при эмиссии токенов.")
@@ -607,9 +409,9 @@ class BotApp:
                 target_info = target_wallet.username if target_wallet and target_wallet.username else f"ID {target_id}"
                 
                 if tx.sender_id == 0:
-                    history_lines.append(f"• `{tx.timestamp[:16]}`: `{tx.amount:.{TokenConfig.DECIMALS}f} {TokenConfig.SYMBOL}` эмитировано Вам.")
+                    history_lines.append(f"• `{tx.timestamp[:16]}`: `{tx.amount:.{self.token_config.DECIMALS}f} {self.token_config.SYMBOL}` эмитировано Вам.")
                 else:
-                    history_lines.append(f"• `{tx.timestamp[:16]}`: `{tx.amount:.{TokenConfig.DECIMALS}f} {TokenConfig.SYMBOL}` {direction} {target_info}")
+                    history_lines.append(f"• `{tx.timestamp[:16]}`: `{tx.amount:.{self.token_config.DECIMALS}f} {self.token_config.SYMBOL}` {direction} {target_info}")
             history_text = "\n".join(history_lines)
             
         markup = InlineKeyboardMarkup()
@@ -631,8 +433,12 @@ class BotApp:
         asyncio.run(self.bot.polling())
 
 if __name__ == "__main__":
-    db_manager = DatabaseManager(BotConfig.DB_PATH)
+    # Initialize BotConfig and TokenConfig
+    bot_config = BotConfig()
+    # TokenConfig is already instantiated in BotApp if needed for string formatting there
+
+    db_manager = DatabaseManager(bot_config.DB_PATH)
     asyncio.run(db_manager.init_db())
     ledger_manager = LedgerManager(db_manager)
-    bot_app = BotApp(BotConfig.BOT_TOKEN, BotConfig.ADMIN_IDS, ledger_manager)
+    bot_app = BotApp(bot_config.BOT_TOKEN, bot_config.ADMIN_IDS, ledger_manager)
     bot_app.run()
