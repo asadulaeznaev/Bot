@@ -36,6 +36,26 @@ class DatabaseManager:
                 )
             ''')
             await db.execute('''
+                CREATE TABLE IF NOT EXISTS stakes (
+                    stake_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER NOT NULL,
+                    amount REAL NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    last_claimed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY(user_id) REFERENCES wallets(user_id)
+                )
+            ''')
+            await db.execute('''
+                CREATE TABLE IF NOT EXISTS active_boosters (
+                    booster_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER NOT NULL,
+                    booster_type TEXT NOT NULL,
+                    active_until TIMESTAMP,
+                    effect_multiplier REAL NOT NULL,
+                    FOREIGN KEY(user_id) REFERENCES wallets(user_id)
+                )
+            ''')
+            await db.execute('''
                 INSERT OR IGNORE INTO token_info (id, current_price, total_supply, name, symbol, decimals)
                 VALUES (1, ?, ?, ?, ?, ?)
             ''', (TokenConfig.INITIAL_PRICE, TokenConfig.TOTAL_SUPPLY, TokenConfig.NAME, TokenConfig.SYMBOL, TokenConfig.DECIMALS))

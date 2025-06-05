@@ -7,3 +7,11 @@ class UserStates(StatesGroup):
     ADMIN_SET_PRICE = State()
     ADMIN_MINT_RECIPIENT = State()
     ADMIN_MINT_AMOUNT = State()
+    # Farming States
+    FARMING_MENU = State()
+    STAKING_AMOUNT = State()
+    UNSTAKING_SELECT_STAKE = State()
+    CLAIMING_SELECT_STAKE = State()
+    BOOSTER_STORE = State()
+    CONFIRM_BUY_BOOSTER = State()
+    SELLING_HKN_AMOUNT = State()
