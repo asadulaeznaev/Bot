@@ -5,7 +5,7 @@ from typing import List
 @dataclass
 class BotConfig:
     """Конфигурация бота с улучшенными настройками производительности"""
-    BOT_TOKEN: str = "7861260810:AAEuI-huruUCJyNPgnMbck2t2AnY4pJejD8"
+    BOT_TOKEN: str = "7938229081:AAGJ2aTo-BZcQKG6Cnrpm1tLBgi-Uts2rXQ"
     ADMIN_IDS: List[int] = None
     DB_PATH: str = "helgykoin.db"
     
