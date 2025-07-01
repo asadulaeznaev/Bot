@@ -350,6 +350,93 @@ class LedgerManager:
             self.logger.error(f"Error getting stakes for user {user_id}: {e}", exc_info=True)
             return []
     
+    async def unstake_tokens(self, user_id: int, stake_id: int) -> Tuple[bool, str]:
+        """Снимает токены со стейка с наградами"""
+        self.logger.info(f"User {user_id} attempting to unstake stake_id {stake_id}")
+        
+        try:
+            # Получаем информацию о стейке
+            stake_row = await self.db_manager.fetch_one(
+                "SELECT user_id, amount, last_claimed_at FROM stakes WHERE stake_id = ?",
+                (stake_id,),
+                use_cache=False
+            )
+            
+            if not stake_row:
+                return False, "Стейк не найден."
+            
+            if stake_row['user_id'] != user_id:
+                return False, "Этот стейк вам не принадлежит."
+            
+            # Вычисляем награды
+            staked_amount = stake_row['amount']
+            last_claimed_at_dt = datetime.fromisoformat(stake_row['last_claimed_at']) if isinstance(stake_row['last_claimed_at'], str) else stake_row['last_claimed_at']
+            current_time = datetime.now()
+            booster_multiplier = await self.get_active_booster_multiplier(user_id, "speed")
+            calculated_rewards = self.calculate_rewards(staked_amount, last_claimed_at_dt, current_time, booster_multiplier)
+            
+            total_return_amount = staked_amount + calculated_rewards
+            
+            operations = [
+                ("UPDATE wallets SET balance = balance + ? WHERE user_id = ?", (total_return_amount, user_id)),
+                ("DELETE FROM stakes WHERE stake_id = ?", (stake_id,)),
+                ("INSERT INTO transactions (sender_id, receiver_id, amount, description) VALUES (?, ?, ?, ?)",
+                 (0, user_id, total_return_amount, f"Возврат со стейкинга (ID: {stake_id}) + награды"))
+            ]
+            
+            if await self.db_manager.execute_transaction(operations):
+                self.logger.info(f"User {user_id} successfully unstaked {staked_amount} HKN (plus {calculated_rewards} rewards)")
+                return True, f"Вы успешно сняли {staked_amount:.{self.token_config.DECIMALS}f} HKN со стейка. Получено наград: {calculated_rewards:.{self.token_config.DECIMALS}f} HKN."
+            return False, "Ошибка при снятии со стейка."
+            
+        except Exception as e:
+            self.logger.error(f"Error unstaking tokens for user {user_id}, stake {stake_id}: {e}", exc_info=True)
+            return False, self.GENERIC_ERROR_MESSAGE
+    
+    async def claim_rewards(self, user_id: int, stake_id: int) -> Tuple[bool, str]:
+        """Забирает награды со стейка без снятия основной суммы"""
+        self.logger.info(f"User {user_id} attempting to claim rewards for stake {stake_id}")
+        
+        try:
+            # Получаем информацию о стейке
+            stake_row = await self.db_manager.fetch_one(
+                "SELECT user_id, amount, last_claimed_at FROM stakes WHERE stake_id = ?",
+                (stake_id,),
+                use_cache=False
+            )
+            
+            if not stake_row:
+                return False, "Стейк не найден."
+            
+            if stake_row['user_id'] != user_id:
+                return False, "Этот стейк вам не принадлежит."
+            
+            # Вычисляем награды
+            staked_amount = stake_row['amount']
+            last_claimed_at_dt = datetime.fromisoformat(stake_row['last_claimed_at']) if isinstance(stake_row['last_claimed_at'], str) else stake_row['last_claimed_at']
+            current_time = datetime.now()
+            booster_multiplier = await self.get_active_booster_multiplier(user_id, "speed")
+            calculated_rewards = self.calculate_rewards(staked_amount, last_claimed_at_dt, current_time, booster_multiplier)
+            
+            if calculated_rewards <= 0:
+                return False, "Нет доступных наград для получения."
+            
+            operations = [
+                ("UPDATE wallets SET balance = balance + ? WHERE user_id = ?", (calculated_rewards, user_id)),
+                ("UPDATE stakes SET last_claimed_at = ? WHERE stake_id = ?", (current_time, stake_id)),
+                ("INSERT INTO transactions (sender_id, receiver_id, amount, description) VALUES (?, ?, ?, ?)",
+                 (0, user_id, calculated_rewards, f"Награда за стейкинг (ID: {stake_id})"))
+            ]
+            
+            if await self.db_manager.execute_transaction(operations):
+                self.logger.info(f"User {user_id} successfully claimed {calculated_rewards} HKN from stake {stake_id}")
+                return True, f"Вы успешно получили {calculated_rewards:.{self.token_config.DECIMALS}f} HKN награды!"
+            return False, "Ошибка при получении наград."
+            
+        except Exception as e:
+            self.logger.error(f"Error claiming rewards for user {user_id}, stake {stake_id}: {e}", exc_info=True)
+            return False, self.GENERIC_ERROR_MESSAGE
+
     # === Бустеры ===
     
     async def buy_booster(self, user_id: int, booster_key: str) -> Tuple[bool, str]:

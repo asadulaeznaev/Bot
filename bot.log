@@ -111,3 +111,15 @@ connector: <aiohttp.connector.TCPConnector object at 0x7f94783f52b0>
 2025-07-01 17:31:43,529 - BotApp - INFO - Bot starting...
 2025-07-01 17:31:43,860 - LedgerManager - INFO - Creating wallet for user_id: 6328016694, username: Ha0s_ISTOK
 2025-07-01 17:31:43,862 - LedgerManager - INFO - Wallet created successfully for user_id: 6328016694
+2025-07-01 17:56:17,677 - DatabaseManager - INFO - DatabaseManager initialized with db_path: helgykoin.db
+2025-07-01 17:56:17,677 - DatabaseManager - INFO - Performance config: pooling=True, caching=True
+2025-07-01 17:56:17,680 - DatabaseManager - INFO - Database initialized successfully with optimizations
+2025-07-01 17:56:17,680 - LedgerManager - INFO - LedgerManager initialized with optimizations
+2025-07-01 17:56:17,680 - BotApp - INFO - All handlers registered successfully
+2025-07-01 17:56:17,680 - BotApp - INFO - BotApp initialized with optimized architecture
+2025-07-01 17:56:17,680 - BotApp - INFO - Bot starting...
+2025-07-01 17:56:21,523 - TeleBot - ERROR - Unhandled exception (full traceback for debug level): A request to the Telegram API was unsuccessful. Error code: 409. Description: Conflict: terminated by other getUpdates request; make sure that only one bot instance is running
+2025-07-01 17:56:25,578 - TeleBot - ERROR - Unhandled exception (full traceback for debug level): A request to the Telegram API was unsuccessful. Error code: 409. Description: Conflict: terminated by other getUpdates request; make sure that only one bot instance is running
+2025-07-01 17:56:30,384 - TeleBot - ERROR - Unhandled exception (full traceback for debug level): A request to the Telegram API was unsuccessful. Error code: 409. Description: Conflict: terminated by other getUpdates request; make sure that only one bot instance is running
+2025-07-01 17:56:36,610 - TeleBot - ERROR - Unhandled exception (full traceback for debug level): A request to the Telegram API was unsuccessful. Error code: 409. Description: Conflict: terminated by other getUpdates request; make sure that only one bot instance is running
+2025-07-01 17:56:42,903 - TeleBot - ERROR - Unhandled exception (full traceback for debug level): A request to the Telegram API was unsuccessful. Error code: 409. Description: Conflict: terminated by other getUpdates request; make sure that only one bot instance is running

@@ -88,6 +88,45 @@ class KeyboardBuilder:
             InlineKeyboardButton("💰 Главное меню", callback_data="main_menu")
         )
         return markup
+    
+    @staticmethod
+    def booster_store(boosters_info: dict, token_config) -> InlineKeyboardMarkup:
+        """Магазин бустеров"""
+        markup = InlineKeyboardMarkup(row_width=1)
+        for key, booster_info in boosters_info.items():
+            button_text = f"Купить '{booster_info['name_ru']}' ({booster_info['cost']:.{token_config.DECIMALS}f} HKN)"
+            markup.add(InlineKeyboardButton(button_text, callback_data=f"buy_booster_{key}"))
+        markup.add(InlineKeyboardButton("🔙 Меню Фарминга", callback_data="go_farming_menu"))
+        return markup
+    
+    @staticmethod
+    def select_stake(stakes: list, action_prefix: str, token_config) -> InlineKeyboardMarkup:
+        """Выбор стейка"""
+        markup = InlineKeyboardMarkup(row_width=1)
+        if not stakes:
+            markup.add(InlineKeyboardButton("Нет доступных стейков", callback_data="no_stakes_to_select"))
+        else:
+            for stake in stakes:
+                pending_rewards_float = float(stake.get('pending_rewards', 0.0))
+                button_text = (f"ID {stake['stake_id']}: {stake['amount']:.{token_config.DECIMALS}f} HKN "
+                               f"(Награда: {pending_rewards_float:.{token_config.DECIMALS}f})")
+                markup.add(InlineKeyboardButton(button_text, callback_data=f"{action_prefix}_select_{stake['stake_id']}"))
+        markup.add(InlineKeyboardButton("🔙 Меню Фарминга", callback_data="go_farming_menu"))
+        return markup
+    
+    @staticmethod
+    def history_navigation(page: int, has_more: bool) -> InlineKeyboardMarkup:
+        """Навигация по истории"""
+        markup = InlineKeyboardMarkup(row_width=2)
+        nav = []
+        if page > 0:
+            nav.append(InlineKeyboardButton("⬅️ Пред.", callback_data=f"history_page_{page-1}"))
+        if has_more:
+            nav.append(InlineKeyboardButton("След. ➡️", callback_data=f"history_page_{page+1}"))
+        if nav:
+            markup.add(*nav)
+        markup.add(InlineKeyboardButton("💰 Главное меню", callback_data="main_menu"))
+        return markup
 
 class WalletHandler(BaseHandler):
     """Обработчик операций с кошельком"""
@@ -451,6 +490,282 @@ class BotApp:
                 f"Использование: /mint <user_id> <amount>\nПример: /mint 123456789 1000"
             )
     
+    # === ИСТОРИЯ ТРАНЗАКЦИЙ ===
+    
+    async def handle_history_callback(self, call: CallbackQuery):
+        """Обрабатывает показ истории"""
+        await self.bot.answer_callback_query(call.id)
+        await self.bot.set_state(call.from_user.id, None, call.message.chat.id)
+        await self._show_history(call.message.chat.id, call.from_user.id, message_id=call.message.message_id)
+    
+    async def handle_history_pagination_callback(self, call: CallbackQuery):
+        """Обрабатывает пагинацию истории"""
+        await self.bot.answer_callback_query(call.id)
+        page = int(call.data.split('_')[-1])
+        await self._show_history(call.message.chat.id, call.from_user.id, page=page, message_id=call.message.message_id)
+    
+    async def _show_history(self, chat_id: int, user_id: int, page: int = 0, message_id: Optional[int] = None):
+        """Показывает историю транзакций"""
+        limit = 5
+        offset = page * limit
+        transactions = await self.ledger_manager.get_transaction_history(user_id, limit, offset)
+        
+        if not transactions and page == 0:
+            text = "История транзакций пуста."
+        elif not transactions and page > 0:
+            text = "Больше транзакций нет."
+        else:
+            lines = ["**Ваша история транзакций:**"]
+            for tx in transactions:
+                ts = tx.formatted_timestamp
+                desc = tx.description or ""
+                direction = tx.get_direction_for_user(user_id)
+                
+                if tx.is_mint:
+                    lines.append(f"• `{ts}`: `+{tx.amount:.{self.token_config.DECIMALS}f} {self.token_config.SYMBOL}` ({desc})")
+                elif tx.is_burn:
+                    lines.append(f"• `{ts}`: `-{tx.amount:.{self.token_config.DECIMALS}f} {self.token_config.SYMBOL}` ({desc})")
+                else:
+                    other_id = tx.sender_id if tx.receiver_id == user_id else tx.receiver_id
+                    other_wallet = await self.ledger_manager.get_wallet(other_id)
+                    other_info = other_wallet.display_name if other_wallet else f"ID:{other_id}"
+                    sign = "+" if direction == "received" else "-"
+                    action = "получено от" if direction == "received" else "отправлено"
+                    lines.append(f"• `{ts}`: `{sign}{tx.amount:.{self.token_config.DECIMALS}f} {self.token_config.SYMBOL}` {action} {other_info}")
+            text = "\n".join(lines)
+        
+        markup = KeyboardBuilder.history_navigation(page, len(transactions) == limit)
+        await self.send_or_edit(chat_id, text, reply_markup=markup, parse_mode='Markdown', message_id=message_id)
+    
+    # === ИНФОРМАЦИЯ О ТОКЕНЕ ===
+    
+    async def handle_token_info_callback(self, call: CallbackQuery):
+        """Обрабатывает показ информации о токене"""
+        await self.bot.answer_callback_query(call.id)
+        await self.bot.set_state(call.from_user.id, None, call.message.chat.id)
+        await self._show_token_info(call.message.chat.id, call.message.message_id)
+    
+    async def handle_market_cap_callback(self, call: CallbackQuery):
+        """Обрабатывает показ капитализации"""
+        await self.bot.answer_callback_query(call.id)
+        await self.bot.set_state(call.from_user.id, None, call.message.chat.id)
+        await self._show_market_cap(call.message.chat.id, call.message.message_id)
+    
+    async def _show_token_info(self, chat_id: int, message_id: Optional[int] = None):
+        """Показывает информацию о токене"""
+        info = await self.ledger_manager.get_token_info()
+        if not info:
+            text = "Информация о токене недоступна."
+        else:
+            text = (f"**{info.name} ({info.symbol})**\n"
+                   f"Десятичные знаки: `{info.decimals}`\n"
+                   f"Общее предложение: `{info.total_supply:.{self.token_config.DECIMALS}f} {info.symbol}`\n"
+                   f"Текущая цена: `${info.current_price:.{self.token_config.DECIMALS}f}`")
+        
+        await self.send_or_edit(chat_id, text, reply_markup=KeyboardBuilder.token_info(), parse_mode='Markdown', message_id=message_id)
+    
+    async def _show_market_cap(self, chat_id: int, message_id: Optional[int] = None):
+        """Показывает рыночную капитализацию"""
+        cap = await self.ledger_manager.calculate_market_cap()
+        text = f"Рыночная капитализация {self.token_config.SYMBOL}: `${cap:.2f}`"
+        
+        markup = InlineKeyboardMarkup(row_width=1)
+        markup.add(
+            InlineKeyboardButton("🔄 Обновить", callback_data="show_marketcap"),
+            InlineKeyboardButton("💰 Главное меню", callback_data="main_menu")
+        )
+        await self.send_or_edit(chat_id, text, reply_markup=markup, parse_mode='Markdown', message_id=message_id)
+    
+    # === ФАРМИНГ И СТЕЙКИНГ ===
+    
+    async def handle_go_farming_menu(self, call: CallbackQuery):
+        """Обрабатывает переход в меню фарминга"""
+        await self.bot.answer_callback_query(call.id)
+        await self.bot.set_state(call.from_user.id, UserStates.FARMING_MENU, call.message.chat.id)
+        await self.send_or_edit(call.message.chat.id, "🌾 Меню Фарминга и Стейкинга:", reply_markup=KeyboardBuilder.farming_menu(), message_id=call.message.message_id)
+    
+    async def handle_farm_my_stakes(self, call: CallbackQuery):
+        """Показывает стейки пользователя"""
+        await self.bot.answer_callback_query(call.id)
+        user_id = call.from_user.id
+        stakes = await self.ledger_manager.get_user_stakes(user_id)
+        
+        text = "📈 *Ваши активные стейки:*\n\n"
+        if not stakes:
+            text = "У вас пока нет активных стейков."
+        else:
+            for stake in stakes:
+                created_at_str = stake['created_at'].strftime('%Y-%m-%d %H:%M') if hasattr(stake['created_at'], 'strftime') else str(stake['created_at'])
+                text += (f"🆔 `{stake['stake_id']}`: `{stake['amount']:.{self.token_config.DECIMALS}f} {self.token_config.SYMBOL}` "
+                        f"(от {created_at_str})\n"
+                        f"   Награда: `{float(stake['pending_rewards']):.{self.token_config.DECIMALS}f} {self.token_config.SYMBOL}`\n\n")
+        
+        await self.send_or_edit(call.message.chat.id, text, reply_markup=KeyboardBuilder.farming_menu(), parse_mode='Markdown', message_id=call.message.message_id)
+    
+    async def handle_farm_stake_hkn_prompt(self, call: CallbackQuery):
+        """Запрос суммы для стейкинга"""
+        await self.bot.answer_callback_query(call.id)
+        await self.bot.set_state(call.from_user.id, UserStates.STAKING_AMOUNT, call.message.chat.id)
+        await self.send_or_edit(call.message.chat.id, "Какую сумму HKN вы хотите поставить на стейк?\n\n(Введите число, например: 1000)", message_id=call.message.message_id)
+    
+    async def handle_staking_amount_input(self, message: Message):
+        """Обрабатывает ввод суммы для стейкинга"""
+        user_id = message.from_user.id
+        chat_id = message.chat.id
+        
+        try:
+            amount = float(message.text.strip())
+            if amount <= 0:
+                await self.bot.send_message(chat_id, "Сумма должна быть больше 0. Попробуйте снова:")
+                return
+            
+            success, msg = await self.ledger_manager.stake_tokens(user_id, amount)
+            await self.bot.send_message(chat_id, msg)
+            await self.bot.delete_state(user_id, chat_id)
+            await self.bot.send_message(chat_id, "🌾 Меню Фарминга и Стейкинга:", reply_markup=KeyboardBuilder.farming_menu())
+            await self.bot.set_state(user_id, UserStates.FARMING_MENU, chat_id)
+            
+        except ValueError:
+            await self.bot.send_message(chat_id, "Введите корректное число.")
+    
+    async def handle_farm_unstake_hkn_prompt(self, call: CallbackQuery):
+        """Запрос выбора стейка для unstaking"""
+        await self.bot.answer_callback_query(call.id)
+        user_id = call.from_user.id
+        stakes = await self.ledger_manager.get_user_stakes(user_id)
+        
+        if not stakes:
+            await self.send_or_edit(call.message.chat.id, "У вас нет стейков для вывода.", reply_markup=KeyboardBuilder.farming_menu(), message_id=call.message.message_id)
+            return
+        
+        await self.bot.set_state(user_id, UserStates.UNSTAKING_SELECT_STAKE, call.message.chat.id)
+        await self.send_or_edit(call.message.chat.id, "Выберите стейк для вывода средств:", reply_markup=KeyboardBuilder.select_stake(stakes, "unstake", self.token_config), message_id=call.message.message_id)
+    
+    async def handle_unstake_selection(self, call: CallbackQuery):
+        """Обрабатывает выбор стейка для unstaking"""
+        await self.bot.answer_callback_query(call.id)
+        user_id = call.from_user.id
+        stake_id = int(call.data.split('_')[-1])
+        
+        success, msg = await self.ledger_manager.unstake_tokens(user_id, stake_id)
+        await self.send_or_edit(call.message.chat.id, msg, message_id=call.message.message_id)
+        await self.bot.set_state(user_id, UserStates.FARMING_MENU, call.message.chat.id)
+        await self.bot.send_message(call.message.chat.id, "🌾 Меню Фарминга и Стейкинга:", reply_markup=KeyboardBuilder.farming_menu())
+    
+    async def handle_farm_claim_rewards_prompt(self, call: CallbackQuery):
+        """Запрос выбора стейка для получения наград"""
+        await self.bot.answer_callback_query(call.id)
+        user_id = call.from_user.id
+        stakes = await self.ledger_manager.get_user_stakes(user_id)
+        claimable_stakes = [s for s in stakes if float(s.get('pending_rewards', 0.0)) > 0]
+        
+        if not claimable_stakes:
+            await self.send_or_edit(call.message.chat.id, "Нет доступных наград для сбора.", reply_markup=KeyboardBuilder.farming_menu(), message_id=call.message.message_id)
+            return
+        
+        await self.bot.set_state(user_id, UserStates.CLAIMING_SELECT_STAKE, call.message.chat.id)
+        await self.send_or_edit(call.message.chat.id, "Выберите стейк для сбора наград:", reply_markup=KeyboardBuilder.select_stake(claimable_stakes, "claim", self.token_config), message_id=call.message.message_id)
+    
+    async def handle_claim_rewards_selection(self, call: CallbackQuery):
+        """Обрабатывает выбор стейка для получения наград"""
+        await self.bot.answer_callback_query(call.id)
+        user_id = call.from_user.id
+        stake_id = int(call.data.split('_')[-1])
+        
+        success, msg = await self.ledger_manager.claim_rewards(user_id, stake_id)
+        await self.send_or_edit(call.message.chat.id, msg, message_id=call.message.message_id)
+        await self.bot.set_state(user_id, UserStates.FARMING_MENU, call.message.chat.id)
+        await self.bot.send_message(call.message.chat.id, "🌾 Меню Фарминга и Стейкинга:", reply_markup=KeyboardBuilder.farming_menu())
+    
+    # === БУСТЕРЫ ===
+    
+    async def handle_farm_boosters_store(self, call: CallbackQuery):
+        """Показывает магазин бустеров"""
+        await self.bot.answer_callback_query(call.id)
+        await self.bot.set_state(call.from_user.id, UserStates.BOOSTER_STORE, call.message.chat.id)
+        
+        store_text = "🚀 **Магазин Ускорителей** 🚀\n\nВыберите ускоритель:"
+        boosters = self.ledger_manager.get_available_boosters_info()
+        
+        if not boosters:
+            store_text = "Ускорители недоступны."
+        else:
+            for key, b_info in boosters.items():
+                store_text += (f"\n\n✨ **{b_info['name_ru']}** ✨\n"
+                              f"   Стоимость: `{b_info['cost']:.{self.token_config.DECIMALS}f} {self.token_config.SYMBOL}` | "
+                              f"Длительность: `{b_info['duration_hours']}`ч.\n"
+                              f"   Множитель: `x{b_info['multiplier']}`\n   _{b_info['description_ru']}_")
+        
+        await self.send_or_edit(call.message.chat.id, store_text, reply_markup=KeyboardBuilder.booster_store(boosters, self.token_config), parse_mode='Markdown', message_id=call.message.message_id)
+    
+    async def handle_buy_booster_prompt(self, call: CallbackQuery):
+        """Запрос подтверждения покупки бустера"""
+        await self.bot.answer_callback_query(call.id)
+        user_id = call.from_user.id
+        booster_key = call.data.replace("buy_booster_", "")
+        
+        if booster_key not in self.ledger_manager.booster_types:
+            await self.send_or_edit(call.message.chat.id, "Ошибка: Неверный ускоритель.", reply_markup=KeyboardBuilder.booster_store(self.ledger_manager.get_available_boosters_info(), self.token_config), message_id=call.message.message_id)
+            return
+        
+        booster_config = self.ledger_manager.booster_types[booster_key]
+        markup = InlineKeyboardMarkup(row_width=2)
+        markup.add(
+            InlineKeyboardButton(f"✅ Да ({booster_config['cost']:.{self.token_config.DECIMALS}f} HKN)", callback_data=f"confirm_buy_booster_{booster_key}"),
+            InlineKeyboardButton("❌ Нет", callback_data="go_booster_store_cancel")
+        )
+        
+        await self.bot.set_state(user_id, UserStates.CONFIRM_BUY_BOOSTER, call.message.chat.id)
+        await self.send_or_edit(call.message.chat.id, f"Купить '{booster_config['name_ru']}' за {booster_config['cost']:.{self.token_config.DECIMALS}f} HKN?", reply_markup=markup, message_id=call.message.message_id)
+    
+    async def handle_buy_booster_confirmation(self, call: CallbackQuery):
+        """Обрабатывает подтверждение покупки бустера"""
+        await self.bot.answer_callback_query(call.id)
+        user_id = call.from_user.id
+        chat_id = call.message.chat.id
+        message_id = call.message.message_id
+        
+        if call.data.startswith("confirm_buy_booster_"):
+            booster_key = call.data.replace("confirm_buy_booster_", "")
+            success, message_text = await self.ledger_manager.buy_booster(user_id, booster_key)
+            final_text = f"{message_text}\n\n🌾 Меню Фарминга и Стейкинга:"
+        elif call.data == "go_booster_store_cancel":
+            final_text = "Покупка отменена.\n\n🌾 Меню Фарминга и Стейкинга:"
+        
+        await self.bot.set_state(user_id, UserStates.FARMING_MENU, chat_id)
+        await self.send_or_edit(chat_id, final_text, reply_markup=KeyboardBuilder.farming_menu(), message_id=message_id, parse_mode='Markdown')
+    
+    # === ПРОДАЖА HKN ===
+    
+    async def handle_sell_hkn_prompt(self, call: CallbackQuery):
+        """Запрос суммы для продажи HKN"""
+        await self.bot.answer_callback_query(call.id)
+        user_id = call.from_user.id
+        chat_id = call.message.chat.id
+        message_id = call.message.message_id
+        
+        sell_rate_info = (f"Текущий курс продажи: 1 HKN = {self.ledger_manager.HKN_SELL_RATE_TO_BOTUSD} BotUSD (концептуально).\n\n"
+                         "Введите сумму HKN, которую хотите продать системе:")
+        
+        await self.bot.set_state(user_id, UserStates.SELLING_HKN_AMOUNT, chat_id)
+        await self.send_or_edit(chat_id, sell_rate_info, message_id=message_id)
+    
+    async def handle_sell_hkn_amount_input(self, message: Message):
+        """Обрабатывает ввод суммы для продажи HKN"""
+        user_id = message.from_user.id
+        chat_id = message.chat.id
+        
+        try:
+            amount_hkn = float(message.text.strip())
+        except ValueError:
+            await self.bot.send_message(chat_id, "Неверный формат суммы. Пожалуйста, введите число (например, 100 или 50.5).")
+            return
+        
+        success, response_message = await self.ledger_manager.sell_hkn_to_system(user_id, amount_hkn)
+        await self.bot.send_message(chat_id, response_message)
+        await self.bot.delete_state(user_id, chat_id)
+        await self.bot.send_message(chat_id, "🏠 Главное меню:", reply_markup=KeyboardBuilder.main_menu())
+
     async def start_polling(self):
         """Запускает поллинг бота"""
         try:
