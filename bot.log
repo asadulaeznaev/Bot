@@ -111,3 +111,7 @@ connector: <aiohttp.connector.TCPConnector object at 0x7f94783f52b0>
 2025-07-01 17:31:43,529 - BotApp - INFO - Bot starting...
 2025-07-01 17:31:43,860 - LedgerManager - INFO - Creating wallet for user_id: 6328016694, username: Ha0s_ISTOK
 2025-07-01 17:31:43,862 - LedgerManager - INFO - Wallet created successfully for user_id: 6328016694
+2025-07-01 18:14:55,007 - DatabaseManager - INFO - DatabaseManager initialized with db_path: test_callbacks.db
+2025-07-01 18:14:55,007 - DatabaseManager - INFO - Performance config: pooling=True, caching=True
+2025-07-01 18:14:55,020 - DatabaseManager - INFO - Database initialized successfully with optimizations
+2025-07-01 18:14:55,020 - LedgerManager - INFO - LedgerManager initialized with optimizations
