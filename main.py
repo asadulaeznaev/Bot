@@ -296,6 +296,37 @@ class BotApp:
             state=UserStates.CONFIRMING_SEND
         )(self.transfer_handler.confirm_transfer)
         
+        # Обработчики истории транзакций
+        self.bot.callback_query_handler(func=lambda call: call.data == 'show_history')(self.handle_history_callback)
+        self.bot.callback_query_handler(func=lambda call: call.data.startswith('history_page_'))(self.handle_history_pagination_callback)
+        
+        # Обработчики информации о токене
+        self.bot.callback_query_handler(func=lambda call: call.data == 'token_info')(self.handle_token_info_callback)
+        self.bot.callback_query_handler(func=lambda call: call.data == 'show_marketcap')(self.handle_market_cap_callback)
+        
+        # Обработчики фарминга
+        self.bot.callback_query_handler(func=lambda call: call.data == 'go_farming_menu')(self.handle_go_farming_menu)
+        self.bot.callback_query_handler(func=lambda call: call.data == 'farm_my_stakes')(self.handle_farm_my_stakes)
+        self.bot.callback_query_handler(func=lambda call: call.data == 'farm_stake_hkn')(self.handle_farm_stake_hkn_prompt)
+        self.bot.message_handler(state=UserStates.STAKING_AMOUNT)(self.handle_staking_amount_input)
+        
+        # Обработчики unstaking
+        self.bot.callback_query_handler(func=lambda call: call.data == 'farm_unstake_hkn')(self.handle_farm_unstake_hkn_prompt)
+        self.bot.callback_query_handler(func=lambda call: call.data.startswith('unstake_select_'))(self.handle_unstake_selection)
+        
+        # Обработчики наград
+        self.bot.callback_query_handler(func=lambda call: call.data == 'farm_claim_rewards')(self.handle_farm_claim_rewards_prompt)
+        self.bot.callback_query_handler(func=lambda call: call.data.startswith('claim_select_'))(self.handle_claim_rewards_selection)
+        
+        # Обработчики бустеров
+        self.bot.callback_query_handler(func=lambda call: call.data == 'farm_boosters_store')(self.handle_farm_boosters_store)
+        self.bot.callback_query_handler(func=lambda call: call.data.startswith('buy_booster_'))(self.handle_buy_booster_prompt)
+        self.bot.callback_query_handler(func=lambda call: call.data.startswith('confirm_buy_booster_') or call.data == 'go_booster_store_cancel')(self.handle_buy_booster_confirmation)
+        
+        # Обработчики продажи HKN
+        self.bot.callback_query_handler(func=lambda call: call.data == 'sell_hkn_prompt')(self.handle_sell_hkn_prompt)
+        self.bot.message_handler(state=UserStates.SELLING_HKN_AMOUNT)(self.handle_sell_hkn_amount_input)
+        
         # Админские команды
         self.bot.message_handler(commands=['setprice'])(self.handle_admin_set_price)
         self.bot.message_handler(commands=['mint'])(self.handle_admin_mint)
