@@ -228,6 +228,312 @@ class TransferHandler(BaseHandler):
             except ValueError:
                 raise ValueError("Неверный формат. Введите ID (число) или username (@):")
 
+class FarmingHandler(BaseHandler):
+    """Обработчик фарминга и стейкинга"""
+    
+    async def show_farming_menu(self, chat_id: int, user_id: int, message_id: Optional[int] = None):
+        """Показывает меню фарминга"""
+        text = "🌾 *Фарминг HelgyKoin*\n\nВыберите действие:"
+        await self.bot_app.send_or_edit(
+            chat_id, text,
+            reply_markup=KeyboardBuilder.farming_menu(),
+            parse_mode='Markdown',
+            message_id=message_id
+        )
+    
+    async def stake_hkn_prompt(self, chat_id: int, user_id: int, message_id: Optional[int] = None):
+        """Запрашивает сумму для стейкинга"""
+        await self.bot.set_state(user_id, UserStates.WAITING_FOR_STAKE_AMOUNT, chat_id)
+        text = (f"Введите сумму HKN для стейкинга:\n\n"
+                f"Минимум: {self.token_config.MIN_STAKE_AMOUNT} HKN\n"
+                f"Максимум: {self.token_config.MAX_STAKE_AMOUNT} HKN\n"
+                f"Доходность: {self.token_config.BASE_HOURLY_REWARD_RATE * 100}% в час")
+        await self.bot_app.send_or_edit(chat_id, text, message_id=message_id)
+    
+    async def handle_stake_amount(self, message: Message):
+        """Обрабатывает ввод суммы для стейкинга"""
+        chat_id = message.chat.id
+        user_id = message.from_user.id
+        
+        try:
+            amount = float(message.text.strip())
+            if amount <= 0:
+                raise ValueError("Сумма должна быть положительной")
+        except ValueError:
+            await self.bot.send_message(chat_id, "Неверный формат суммы. Введите число:")
+            return
+        
+        success, msg = await self.ledger_manager.stake_tokens(user_id, amount)
+        await self.bot.send_message(chat_id, msg)
+        
+        if success:
+            await self.show_farming_menu(chat_id, user_id)
+        
+        await self.bot.delete_state(user_id, chat_id)
+    
+    async def show_user_stakes(self, chat_id: int, user_id: int, message_id: Optional[int] = None):
+        """Показывает стейки пользователя"""
+        stakes = await self.ledger_manager.get_user_stakes(user_id)
+        
+        if not stakes:
+            text = "У вас нет активных стейков."
+        else:
+            text = "📈 *Ваши стейки:*\n\n"
+            total_staked = 0
+            total_rewards = 0
+            
+            for stake in stakes:
+                total_staked += stake['amount']
+                total_rewards += stake['pending_rewards']
+                text += (f"🆔 Стейк #{stake['stake_id']}\n"
+                        f"💰 Сумма: {stake['amount']:.{self.token_config.DECIMALS}f} HKN\n"
+                        f"🎁 Награды: {stake['pending_rewards']:.{self.token_config.DECIMALS}f} HKN\n"
+                        f"📅 Создан: {stake['created_at'].strftime('%Y-%m-%d %H:%M')}\n\n")
+            
+            text += f"📊 *Итого стейков:* {total_staked:.{self.token_config.DECIMALS}f} HKN\n"
+            text += f"🏆 *Всего наград:* {total_rewards:.{self.token_config.DECIMALS}f} HKN"
+        
+        await self.bot_app.send_or_edit(
+            chat_id, text,
+            reply_markup=KeyboardBuilder.farming_menu(),
+            parse_mode='Markdown',
+            message_id=message_id
+        )
+    
+    async def claim_rewards(self, chat_id: int, user_id: int, message_id: Optional[int] = None):
+        """Собирает награды со всех стейков"""
+        success, msg = await self.ledger_manager.claim_all_rewards(user_id)
+        text = f"🎁 *Сбор наград*\n\n{msg}"
+        
+        await self.bot_app.send_or_edit(
+            chat_id, text,
+            reply_markup=KeyboardBuilder.farming_menu(),
+            parse_mode='Markdown',
+            message_id=message_id
+        )
+    
+    async def unstake_hkn_prompt(self, chat_id: int, user_id: int, message_id: Optional[int] = None):
+        """Запрашивает ID стейка для снятия"""
+        stakes = await self.ledger_manager.get_user_stakes(user_id)
+        
+        if not stakes:
+            text = "У вас нет активных стейков для снятия."
+            await self.bot_app.send_or_edit(
+                chat_id, text,
+                reply_markup=KeyboardBuilder.farming_menu(),
+                message_id=message_id
+            )
+            return
+        
+        text = "Выберите стейк для снятия (введите ID):\n\n"
+        for stake in stakes:
+            text += (f"🆔 {stake['stake_id']}: {stake['amount']:.{self.token_config.DECIMALS}f} HKN "
+                    f"(награды: {stake['pending_rewards']:.{self.token_config.DECIMALS}f})\n")
+        
+        await self.bot.set_state(user_id, UserStates.WAITING_FOR_UNSTAKE_ID, chat_id)
+        await self.bot_app.send_or_edit(chat_id, text, message_id=message_id)
+    
+    async def handle_unstake_id(self, message: Message):
+        """Обрабатывает ID стейка для снятия"""
+        chat_id = message.chat.id
+        user_id = message.from_user.id
+        
+        try:
+            stake_id = int(message.text.strip())
+        except ValueError:
+            await self.bot.send_message(chat_id, "Неверный формат ID. Введите число:")
+            return
+        
+        success, msg = await self.ledger_manager.unstake_tokens(user_id, stake_id)
+        await self.bot.send_message(chat_id, msg)
+        
+        if success:
+            await self.show_farming_menu(chat_id, user_id)
+        
+        await self.bot.delete_state(user_id, chat_id)
+    
+    async def show_boosters_store(self, chat_id: int, user_id: int, message_id: Optional[int] = None):
+        """Показывает магазин ускорителей"""
+        boosters = self.ledger_manager.get_available_boosters_info()
+        wallet = await self.ledger_manager.get_wallet(user_id)
+        balance = wallet.balance if wallet else 0
+        
+        text = f"🚀 *Магазин ускорителей*\n\nВаш баланс: {balance:.{self.token_config.DECIMALS}f} HKN\n\n"
+        
+        markup = InlineKeyboardMarkup(row_width=1)
+        for key, booster in boosters.items():
+            can_afford = "✅" if balance >= booster['cost'] else "❌"
+            text += (f"{can_afford} *{booster['name_ru']}*\n"
+                    f"💰 Цена: {booster['cost']:.{self.token_config.DECIMALS}f} HKN\n"
+                    f"⚡ Эффект: x{booster['multiplier']}\n"
+                    f"⏰ Длительность: {booster['duration_hours']}ч\n"
+                    f"📝 {booster['description_ru']}\n\n")
+            
+            if balance >= booster['cost']:
+                markup.add(InlineKeyboardButton(
+                    f"Купить {booster['name_ru']}", 
+                    callback_data=f"buy_booster_{key}"
+                ))
+        
+        markup.add(InlineKeyboardButton("🌾 Назад к фармингу", callback_data="go_farming_menu"))
+        
+        await self.bot_app.send_or_edit(
+            chat_id, text,
+            reply_markup=markup,
+            parse_mode='Markdown',
+            message_id=message_id
+        )
+
+class HistoryHandler(BaseHandler):
+    """Обработчик истории транзакций"""
+    
+    async def show_history(self, chat_id: int, user_id: int, message_id: Optional[int] = None, page: int = 0):
+        """Показывает историю транзакций"""
+        limit = 5
+        offset = page * limit
+        transactions = await self.ledger_manager.get_transaction_history(user_id, limit, offset)
+        
+        if not transactions:
+            if page == 0:
+                text = "📜 История транзакций пуста."
+            else:
+                text = "📜 Больше транзакций нет."
+            
+            markup = InlineKeyboardMarkup()
+            if page > 0:
+                markup.add(InlineKeyboardButton("◀️ Назад", callback_data=f"history_page_{page-1}"))
+            markup.add(InlineKeyboardButton("🏠 Главное меню", callback_data="main_menu"))
+        else:
+            text = f"📜 *История транзакций* (стр. {page + 1})\n\n"
+            
+            for tx in transactions:
+                direction = tx.get_direction_for_user(user_id)
+                if direction == "received":
+                    if tx.is_mint:
+                        icon = "🎁"
+                        desc = "Получено (эмиссия)"
+                    else:
+                        icon = "📥"
+                        desc = "Получено"
+                elif direction == "sent":
+                    if tx.is_burn:
+                        icon = "🔥"
+                        desc = "Сожжено"
+                    else:
+                        icon = "📤"
+                        desc = "Отправлено"
+                else:
+                    icon = "❓"
+                    desc = "Неизвестно"
+                
+                text += (f"{icon} *{desc}*\n"
+                        f"💰 {tx.amount:.{self.token_config.DECIMALS}f} HKN\n"
+                        f"📅 {tx.formatted_timestamp}\n")
+                
+                if tx.description:
+                    text += f"📝 {tx.description}\n"
+                text += "\n"
+            
+            # Создаем клавиатуру пагинации
+            markup = InlineKeyboardMarkup(row_width=3)
+            buttons = []
+            if page > 0:
+                buttons.append(InlineKeyboardButton("◀️", callback_data=f"history_page_{page-1}"))
+            
+            buttons.append(InlineKeyboardButton(f"{page + 1}", callback_data="noop"))
+            
+            if len(transactions) == limit:  # Возможно есть еще страницы
+                buttons.append(InlineKeyboardButton("▶️", callback_data=f"history_page_{page+1}"))
+            
+            markup.add(*buttons)
+            markup.add(InlineKeyboardButton("🏠 Главное меню", callback_data="main_menu"))
+        
+        await self.bot_app.send_or_edit(
+            chat_id, text,
+            reply_markup=markup,
+            parse_mode='Markdown',
+            message_id=message_id
+        )
+
+class TokenInfoHandler(BaseHandler):
+    """Обработчик информации о токене"""
+    
+    async def show_token_info(self, chat_id: int, user_id: int, message_id: Optional[int] = None):
+        """Показывает информацию о токене"""
+        token_info = await self.ledger_manager.get_token_info()
+        
+        if not token_info:
+            text = "❌ Ошибка получения информации о токене."
+        else:
+            text = (f"ℹ️ *Информация о {token_info.name}*\n\n"
+                   f"🏷️ Символ: {token_info.symbol}\n"
+                   f"💰 Общее предложение: {token_info.total_supply:,.{token_info.decimals}f}\n"
+                   f"💵 Текущая цена: ${token_info.current_price:.{token_info.decimals}f}\n"
+                   f"📊 Рыночная капитализация: ${token_info.market_cap:,.2f}\n"
+                   f"🔢 Десятичные знаки: {token_info.decimals}")
+        
+        await self.bot_app.send_or_edit(
+            chat_id, text,
+            reply_markup=KeyboardBuilder.token_info(),
+            parse_mode='Markdown',
+            message_id=message_id
+        )
+    
+    async def show_market_cap(self, chat_id: int, user_id: int, message_id: Optional[int] = None):
+        """Показывает рыночную капитализацию"""
+        market_cap = await self.ledger_manager.calculate_market_cap()
+        text = f"📊 *Рыночная капитализация HelgyKoin*\n\n💰 ${market_cap:,.2f}"
+        
+        await self.bot_app.send_or_edit(
+            chat_id, text,
+            reply_markup=KeyboardBuilder.token_info(),
+            parse_mode='Markdown',
+            message_id=message_id
+        )
+
+class SellHandler(BaseHandler):
+    """Обработчик продажи токенов"""
+    
+    async def sell_hkn_prompt(self, chat_id: int, user_id: int, message_id: Optional[int] = None):
+        """Запрашивает сумму для продажи"""
+        wallet = await self.ledger_manager.get_wallet(user_id)
+        if not wallet:
+            text = "❌ Кошелек не найден."
+            await self.bot_app.send_or_edit(chat_id, text, message_id=message_id)
+            return
+        
+        text = (f"🏦 *Продажа HKN*\n\n"
+               f"Ваш баланс: {wallet.balance:.{self.token_config.DECIMALS}f} HKN\n"
+               f"Курс: 1 HKN = 0.00005 BotUSD\n\n"
+               f"Введите количество HKN для продажи:")
+        
+        await self.bot.set_state(user_id, UserStates.WAITING_FOR_SELL_AMOUNT, chat_id)
+        await self.bot_app.send_or_edit(chat_id, text, parse_mode='Markdown', message_id=message_id)
+    
+    async def handle_sell_amount(self, message: Message):
+        """Обрабатывает сумму для продажи"""
+        chat_id = message.chat.id
+        user_id = message.from_user.id
+        
+        try:
+            amount = float(message.text.strip())
+            if amount <= 0:
+                raise ValueError("Сумма должна быть положительной")
+        except ValueError:
+            await self.bot.send_message(chat_id, "Неверный формат суммы. Введите число:")
+            return
+        
+        success, msg = await self.ledger_manager.sell_hkn_to_system(user_id, amount)
+        await self.bot.send_message(chat_id, msg)
+        
+        if success:
+            await self.bot.send_message(
+                chat_id, "🏠 Главное меню:",
+                reply_markup=KeyboardBuilder.main_menu()
+            )
+        
+        await self.bot.delete_state(user_id, chat_id)
+
 class BotApp:
     """Главный класс Telegram бота с ООП архитектурой"""
     
@@ -241,6 +547,10 @@ class BotApp:
         # Инициализация обработчиков
         self.wallet_handler = WalletHandler(self)
         self.transfer_handler = TransferHandler(self)
+        self.farming_handler = FarmingHandler(self)
+        self.history_handler = HistoryHandler(self)
+        self.token_info_handler = TokenInfoHandler(self)
+        self.sell_handler = SellHandler(self)
         
         # Настройка фильтров и обработчиков
         self.bot.add_custom_filter(StateFilter(self.bot))
@@ -283,10 +593,35 @@ class BotApp:
         self.bot.message_handler(commands=['balance'])(self.handle_balance_command)
         self.bot.message_handler(commands=['send'])(self.handle_send_command)
         
-        # Callback обработчики
+        # Callback обработчики - основные
         self.bot.callback_query_handler(func=lambda call: call.data == 'show_balance')(self.handle_show_balance_callback)
         self.bot.callback_query_handler(func=lambda call: call.data == 'send_hkn')(self.handle_send_hkn_callback)
         self.bot.callback_query_handler(func=lambda call: call.data == 'main_menu')(self.handle_main_menu_callback)
+        
+        # Callback обработчики - фарминг
+        self.bot.callback_query_handler(func=lambda call: call.data == 'go_farming_menu')(self.handle_farming_menu_callback)
+        self.bot.callback_query_handler(func=lambda call: call.data == 'farm_stake_hkn')(self.handle_stake_hkn_callback)
+        self.bot.callback_query_handler(func=lambda call: call.data == 'farm_unstake_hkn')(self.handle_unstake_hkn_callback)
+        self.bot.callback_query_handler(func=lambda call: call.data == 'farm_claim_rewards')(self.handle_claim_rewards_callback)
+        self.bot.callback_query_handler(func=lambda call: call.data == 'farm_my_stakes')(self.handle_my_stakes_callback)
+        self.bot.callback_query_handler(func=lambda call: call.data == 'farm_boosters_store')(self.handle_boosters_store_callback)
+        
+        # Callback обработчики - бустеры
+        self.bot.callback_query_handler(func=lambda call: call.data.startswith('buy_booster_'))(self.handle_buy_booster_callback)
+        
+        # Callback обработчики - история
+        self.bot.callback_query_handler(func=lambda call: call.data == 'show_history')(self.handle_history_callback)
+        self.bot.callback_query_handler(func=lambda call: call.data.startswith('history_page_'))(self.handle_history_page_callback)
+        
+        # Callback обработчики - информация о токене
+        self.bot.callback_query_handler(func=lambda call: call.data == 'token_info')(self.handle_token_info_callback)
+        self.bot.callback_query_handler(func=lambda call: call.data == 'show_marketcap')(self.handle_marketcap_callback)
+        
+        # Callback обработчики - продажа
+        self.bot.callback_query_handler(func=lambda call: call.data == 'sell_hkn_prompt')(self.handle_sell_hkn_prompt_callback)
+        
+        # Callback обработчики - вспомогательные
+        self.bot.callback_query_handler(func=lambda call: call.data == 'noop')(self.handle_noop_callback)
         
         # Обработчики состояний для переводов
         self.bot.message_handler(state=UserStates.WAITING_FOR_RECIPIENT)(self.transfer_handler.handle_recipient_input)
@@ -295,6 +630,13 @@ class BotApp:
             func=lambda call: call.data in ['confirm_send', 'cancel_send'], 
             state=UserStates.CONFIRMING_SEND
         )(self.transfer_handler.confirm_transfer)
+        
+        # Обработчики состояний для фарминга
+        self.bot.message_handler(state=UserStates.WAITING_FOR_STAKE_AMOUNT)(self.farming_handler.handle_stake_amount)
+        self.bot.message_handler(state=UserStates.WAITING_FOR_UNSTAKE_ID)(self.farming_handler.handle_unstake_id)
+        
+        # Обработчики состояний для продажи
+        self.bot.message_handler(state=UserStates.WAITING_FOR_SELL_AMOUNT)(self.sell_handler.handle_sell_amount)
         
         # Админские команды
         self.bot.message_handler(commands=['setprice'])(self.handle_admin_set_price)
@@ -433,6 +775,105 @@ class BotApp:
         finally:
             await self.ledger_manager.db_manager.close()
             self.logger.info("Bot stopped.")
+
+    # === Новые callback обработчики ===
+    
+    async def handle_farming_menu_callback(self, call: CallbackQuery):
+        """Обрабатывает callback меню фарминга"""
+        await self.bot.answer_callback_query(call.id)
+        await self.bot.set_state(call.from_user.id, None, call.message.chat.id)
+        await self.farming_handler.show_farming_menu(
+            call.message.chat.id, call.from_user.id, call.message.message_id
+        )
+    
+    async def handle_stake_hkn_callback(self, call: CallbackQuery):
+        """Обрабатывает callback стейкинга HKN"""
+        await self.bot.answer_callback_query(call.id)
+        await self.farming_handler.stake_hkn_prompt(
+            call.message.chat.id, call.from_user.id, call.message.message_id
+        )
+    
+    async def handle_unstake_hkn_callback(self, call: CallbackQuery):
+        """Обрабатывает callback снятия стейка"""
+        await self.bot.answer_callback_query(call.id)
+        await self.farming_handler.unstake_hkn_prompt(
+            call.message.chat.id, call.from_user.id, call.message.message_id
+        )
+    
+    async def handle_claim_rewards_callback(self, call: CallbackQuery):
+        """Обрабатывает callback сбора наград"""
+        await self.bot.answer_callback_query(call.id)
+        await self.farming_handler.claim_rewards(
+            call.message.chat.id, call.from_user.id, call.message.message_id
+        )
+    
+    async def handle_my_stakes_callback(self, call: CallbackQuery):
+        """Обрабатывает callback показа стейков"""
+        await self.bot.answer_callback_query(call.id)
+        await self.farming_handler.show_user_stakes(
+            call.message.chat.id, call.from_user.id, call.message.message_id
+        )
+    
+    async def handle_boosters_store_callback(self, call: CallbackQuery):
+        """Обрабатывает callback магазина ускорителей"""
+        await self.bot.answer_callback_query(call.id)
+        await self.farming_handler.show_boosters_store(
+            call.message.chat.id, call.from_user.id, call.message.message_id
+        )
+    
+    async def handle_buy_booster_callback(self, call: CallbackQuery):
+        """Обрабатывает callback покупки ускорителя"""
+        await self.bot.answer_callback_query(call.id)
+        booster_key = call.data.replace('buy_booster_', '')
+        success, msg = await self.ledger_manager.buy_booster(call.from_user.id, booster_key)
+        
+        text = f"🚀 *Покупка ускорителя*\n\n{msg}"
+        await self.send_or_edit(
+            call.message.chat.id, text,
+            reply_markup=KeyboardBuilder.farming_menu(),
+            parse_mode='Markdown',
+            message_id=call.message.message_id
+        )
+    
+    async def handle_history_callback(self, call: CallbackQuery):
+        """Обрабатывает callback истории"""
+        await self.bot.answer_callback_query(call.id)
+        await self.history_handler.show_history(
+            call.message.chat.id, call.from_user.id, call.message.message_id
+        )
+    
+    async def handle_history_page_callback(self, call: CallbackQuery):
+        """Обрабатывает callback страницы истории"""
+        await self.bot.answer_callback_query(call.id)
+        page = int(call.data.replace('history_page_', ''))
+        await self.history_handler.show_history(
+            call.message.chat.id, call.from_user.id, call.message.message_id, page
+        )
+    
+    async def handle_token_info_callback(self, call: CallbackQuery):
+        """Обрабатывает callback информации о токене"""
+        await self.bot.answer_callback_query(call.id)
+        await self.token_info_handler.show_token_info(
+            call.message.chat.id, call.from_user.id, call.message.message_id
+        )
+    
+    async def handle_marketcap_callback(self, call: CallbackQuery):
+        """Обрабатывает callback рыночной капитализации"""
+        await self.bot.answer_callback_query(call.id)
+        await self.token_info_handler.show_market_cap(
+            call.message.chat.id, call.from_user.id, call.message.message_id
+        )
+    
+    async def handle_sell_hkn_prompt_callback(self, call: CallbackQuery):
+        """Обрабатывает callback продажи HKN"""
+        await self.bot.answer_callback_query(call.id)
+        await self.sell_handler.sell_hkn_prompt(
+            call.message.chat.id, call.from_user.id, call.message.message_id
+        )
+    
+    async def handle_noop_callback(self, call: CallbackQuery):
+        """Обрабатывает callback заглушки для кнопки номера страницы"""
+        await self.bot.answer_callback_query(call.id)
 
 async def main():
     """Главная функция запуска бота"""
