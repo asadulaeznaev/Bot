@@ -1,0 +1,113 @@
+2025-07-01 17:26:22,769 - DatabaseManager - INFO - DatabaseManager initialized with db_path: helgykoin.db
+2025-07-01 17:26:22,769 - DatabaseManager - INFO - Performance config: pooling=True, caching=True
+2025-07-01 17:26:22,777 - root - CRITICAL - Critical error: threads can only be started once
+Traceback (most recent call last):
+  File "/workspace/run.py", line 32, in <module>
+    asyncio.run(main())
+    ~~~~~~~~~~~^^^^^^^^
+  File "/usr/lib/python3.13/asyncio/runners.py", line 195, in run
+    return runner.run(main)
+           ~~~~~~~~~~^^^^^^
+  File "/usr/lib/python3.13/asyncio/runners.py", line 118, in run
+    return self._loop.run_until_complete(task)
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^
+  File "/usr/lib/python3.13/asyncio/base_events.py", line 719, in run_until_complete
+    return future.result()
+           ~~~~~~~~~~~~~^^
+  File "/workspace/main.py", line 447, in main
+    await db_manager.init_db()
+  File "/workspace/database.py", line 153, in init_db
+    async with self._get_connection() as db:
+               ~~~~~~~~~~~~~~~~~~~~^^
+  File "/usr/lib/python3.13/contextlib.py", line 214, in __aenter__
+    return await anext(self.gen)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/database.py", line 259, in _get_connection
+    async with self.pool.get_connection() as conn:
+               ~~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "/usr/lib/python3.13/contextlib.py", line 214, in __aenter__
+    return await anext(self.gen)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/database.py", line 51, in get_connection
+    conn = await asyncio.wait_for(self._pool.get_nowait(), timeout=0.1)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.13/asyncio/tasks.py", line 507, in wait_for
+    return await fut
+           ^^^^^^^^^
+  File "/home/ubuntu/.local/lib/python3.13/site-packages/aiosqlite/core.py", line 139, in __await__
+    self.start()
+    ~~~~~~~~~~^^
+  File "/usr/lib/python3.13/threading.py", line 967, in start
+    raise RuntimeError("threads can only be started once")
+RuntimeError: threads can only be started once
+2025-07-01 17:27:11,470 - DatabaseManager - INFO - DatabaseManager initialized with db_path: helgykoin.db
+2025-07-01 17:27:11,471 - DatabaseManager - INFO - Performance config: pooling=True, caching=True
+2025-07-01 17:27:11,477 - DatabaseManager - INFO - Database initialized successfully with optimizations
+2025-07-01 17:27:11,477 - LedgerManager - INFO - LedgerManager initialized with optimizations
+2025-07-01 17:27:11,477 - BotApp - INFO - All handlers registered successfully
+2025-07-01 17:27:11,477 - BotApp - INFO - BotApp initialized with optimized architecture
+2025-07-01 17:27:11,477 - BotApp - INFO - Bot starting...
+2025-07-01 17:27:11,477 - BotApp - CRITICAL - Bot polling error: AsyncTeleBot.polling() got an unexpected keyword argument 'long_polling_timeout'
+Traceback (most recent call last):
+  File "/workspace/main.py", line 427, in start_polling
+    await self.bot.polling(
+          ~~~~~~~~~~~~~~~~^
+        non_stop=True,
+        ^^^^^^^^^^^^^^
+        timeout=self.bot_config.POLLING_TIMEOUT,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        long_polling_timeout=self.bot_config.LONG_POLLING_TIMEOUT
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+TypeError: AsyncTeleBot.polling() got an unexpected keyword argument 'long_polling_timeout'
+2025-07-01 17:27:11,485 - DatabaseManager - INFO - Database manager closed
+2025-07-01 17:27:11,485 - BotApp - INFO - Bot stopped.
+2025-07-01 17:27:46,057 - DatabaseManager - INFO - DatabaseManager initialized with db_path: helgykoin.db
+2025-07-01 17:27:46,057 - DatabaseManager - INFO - Performance config: pooling=True, caching=True
+2025-07-01 17:27:46,062 - DatabaseManager - INFO - Database initialized successfully with optimizations
+2025-07-01 17:27:46,062 - LedgerManager - INFO - LedgerManager initialized with optimizations
+2025-07-01 17:27:46,062 - BotApp - INFO - All handlers registered successfully
+2025-07-01 17:27:46,062 - BotApp - INFO - BotApp initialized with optimized architecture
+2025-07-01 17:27:46,062 - BotApp - INFO - Bot starting...
+2025-07-01 17:27:48,006 - BotApp - CRITICAL - Bot polling error: A request to the Telegram API was unsuccessful. Error code: 401. Description: Unauthorized
+Traceback (most recent call last):
+  File "/workspace/main.py", line 427, in start_polling
+    await self.bot.polling(
+    ...<2 lines>...
+    )
+  File "/home/ubuntu/.local/lib/python3.13/site-packages/telebot/async_telebot.py", line 324, in polling
+    await self._process_polling(non_stop, interval, timeout, request_timeout, allowed_updates)
+  File "/home/ubuntu/.local/lib/python3.13/site-packages/telebot/async_telebot.py", line 441, in _process_polling
+    self._user = await self.get_me()
+                 ^^^^^^^^^^^^^^^^^^^
+  File "/home/ubuntu/.local/lib/python3.13/site-packages/telebot/async_telebot.py", line 2680, in get_me
+    result = await asyncio_helper.get_me(self.token)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ubuntu/.local/lib/python3.13/site-packages/telebot/asyncio_helper.py", line 156, in get_me
+    return await _process_request(token, method_url)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ubuntu/.local/lib/python3.13/site-packages/telebot/asyncio_helper.py", line 99, in _process_request
+    raise e
+  File "/home/ubuntu/.local/lib/python3.13/site-packages/telebot/asyncio_helper.py", line 95, in _process_request
+    json_result = await _check_result(url, resp)
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ubuntu/.local/lib/python3.13/site-packages/telebot/asyncio_helper.py", line 276, in _check_result
+    raise ApiTelegramException(method_name, result, result_json)
+telebot.asyncio_helper.ApiTelegramException: A request to the Telegram API was unsuccessful. Error code: 401. Description: Unauthorized
+2025-07-01 17:27:48,010 - DatabaseManager - INFO - Database manager closed
+2025-07-01 17:27:48,011 - BotApp - INFO - Bot stopped.
+2025-07-01 17:27:48,027 - asyncio - ERROR - Unclosed client session
+client_session: <aiohttp.client.ClientSession object at 0x7f94783f56a0>
+2025-07-01 17:27:48,027 - asyncio - ERROR - Unclosed connector
+connections: ['deque([(<aiohttp.client_proto.ResponseHandler object at 0x7f9478400b90>, 934.949127425)])']
+connector: <aiohttp.connector.TCPConnector object at 0x7f94783f52b0>
+2025-07-01 17:31:43,525 - DatabaseManager - INFO - DatabaseManager initialized with db_path: helgykoin.db
+2025-07-01 17:31:43,525 - DatabaseManager - INFO - Performance config: pooling=True, caching=True
+2025-07-01 17:31:43,529 - DatabaseManager - INFO - Database initialized successfully with optimizations
+2025-07-01 17:31:43,529 - LedgerManager - INFO - LedgerManager initialized with optimizations
+2025-07-01 17:31:43,529 - BotApp - INFO - All handlers registered successfully
+2025-07-01 17:31:43,529 - BotApp - INFO - BotApp initialized with optimized architecture
+2025-07-01 17:31:43,529 - BotApp - INFO - Bot starting...
+2025-07-01 17:31:43,860 - LedgerManager - INFO - Creating wallet for user_id: 6328016694, username: Ha0s_ISTOK
+2025-07-01 17:31:43,862 - LedgerManager - INFO - Wallet created successfully for user_id: 6328016694
